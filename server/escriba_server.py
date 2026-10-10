@@ -123,6 +123,11 @@ def main():
     p.add_argument('--binary',default='fscript')
     a=p.parse_args(); token=os.environ.get('ESCRIBA_TOKEN','')
     if a.bind not in {'127.0.0.1','localhost','::1'} and not token: p.error('Set ESCRIBA_TOKEN when listening beyond loopback')
+    try:
+        installed=subprocess.run([a.binary,'--list-models'],check=True,capture_output=True,text=True,timeout=15).stdout
+        if not all(model in installed for model in MODELS): raise ValueError('Missing model presets')
+    except (OSError,subprocess.SubprocessError,ValueError):
+        p.error('fast-transcript is missing or too old for these presets. Run scripts/start-server.sh to install the supported version, or set --binary to a compatible fscript.')
     print(f'Escriba listening on {a.bind}:{a.port}; model={a.model}',flush=True)
     ThreadingHTTPServer((a.bind,a.port),handler_factory(a.model,a.device,a.binary,token)).serve_forever()
 
