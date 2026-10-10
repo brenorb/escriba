@@ -4,6 +4,7 @@ import android.content.*;
 import android.net.Uri;
 import android.widget.TextView;
 import android.widget.Button;
+import android.widget.ScrollView;
 import android.view.View;
 import android.view.ViewGroup;
 import java.io.*;
@@ -11,7 +12,7 @@ import java.net.*;
 import java.nio.charset.StandardCharsets;
 public class ShareFlowTest extends ActivityInstrumentationTestCase2<MainActivity> {
     public ShareFlowTest(){super(MainActivity.class);}
-    private ServerSocket server; private Thread handler; private volatile int requests; private volatile int delayMillis, responseCode=200;
+    private ServerSocket server; private Thread handler; private volatile int requests; private volatile int delayMillis, responseCode=200, textRepeats=1;
     @Override protected void setUp() throws Exception {
         super.setUp();
         server=new ServerSocket(0,8,InetAddress.getByName("127.0.0.1"));
@@ -24,7 +25,7 @@ public class ShareFlowTest extends ActivityInstrumentationTestCase2<MainActivity
             if(body.length!=length)throw new IOException("Truncated body");
             requests++;
             if(delayMillis>0)try{Thread.sleep(delayMillis);}catch(InterruptedException ignored){}
-            String json="{\"text\":\"Trecho "+requests+" transcrito.\"}";
+            String json="{\"text\":\""+("Trecho "+requests+" transcrito. ").repeat(textRepeats)+"\"}";
             byte[] data=json.getBytes(StandardCharsets.UTF_8);
             s.getOutputStream().write(("HTTP/1.1 "+responseCode+" Test\r\nContent-Type: application/json\r\nContent-Length: "+data.length+"\r\nConnection: close\r\n\r\n").getBytes());s.getOutputStream().write(data);
         }catch(IOException ignored){}},"fixture-server");handler.start();
@@ -45,11 +46,14 @@ public class ShareFlowTest extends ActivityInstrumentationTestCase2<MainActivity
         fail("Completion not reached: "+text(a,MainActivity.STATUS_ID));
     }
     public void testOpusAutoStartsAndPublishesOrderedChunks()throws Exception{
-        MainActivity a=share("voice.opus");waitDone(a);
+        textRepeats=100;delayMillis=300;MainActivity a=share("voice.opus");waitDone(a);
+        Thread.sleep(500);
         assertEquals(3,requests);
         String result=text(a,MainActivity.TRANSCRIPT_ID);
         assertTrue(result.contains("Trecho 1 transcrito."));assertTrue(result.contains("Trecho 3 transcrito."));
         assertTrue(result.indexOf("Trecho 1")<result.indexOf("Trecho 3"));
+        getInstrumentation().waitForIdleSync();
+        getInstrumentation().runOnMainSync(()->assertEquals("Appending transcript must preserve the reader position",0,scroll(a.getWindow().getDecorView()).getScrollY()));
     }
     public void testMp3AndNewShareReplacePreviousText()throws Exception{
         MainActivity a=share("short.mp3");waitDone(a);assertEquals(1,requests);
@@ -67,6 +71,11 @@ public class ShareFlowTest extends ActivityInstrumentationTestCase2<MainActivity
         long limit=System.currentTimeMillis()+10000;
         while(requests==0 && System.currentTimeMillis()<limit)Thread.sleep(50);
         assertTrue("Request never started",requests>0);
+    }
+    private ScrollView scroll(View v){
+        if(v instanceof ScrollView)return (ScrollView)v;
+        if(v instanceof ViewGroup)for(int i=0;i<((ViewGroup)v).getChildCount();i++){ScrollView s=scroll(((ViewGroup)v).getChildAt(i));if(s!=null)return s;}
+        return null;
     }
     private Button button(View v,String label){
         if(v instanceof Button && ((Button)v).getText().toString().equals(label))return (Button)v;
@@ -103,6 +112,23 @@ public class ShareFlowTest extends ActivityInstrumentationTestCase2<MainActivity
         long limit=System.currentTimeMillis()+15000;
         while(System.currentTimeMillis()<limit && !text(a,MainActivity.STATUS_ID).startsWith("Não foi possível"))Thread.sleep(50);
         assertTrue(text(a,MainActivity.STATUS_ID).contains("HTTP 401"));assertEquals("",text(a,MainActivity.TRANSCRIPT_ID));
+    }
+    public void testNativeEarlyCompletionIsRejected()throws Exception{
+        int[] calls=new int[3];
+        getInstrumentation().runOnMainSync(()->{
+            NativeEngine engine=new NativeEngine(getInstrumentation().getTargetContext(),new NativeEngine.Listener(){
+                public void partial(String text){}
+                public void segment(String text){calls[0]++;}
+                public void done(){calls[1]++;}
+                public void error(String text){calls[2]++;}
+            });
+            android.os.Bundle result=new android.os.Bundle();
+            result.putStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION,new java.util.ArrayList<>(java.util.Arrays.asList("Truncated result")));
+            engine.onResults(result);
+        });
+        assertEquals("Do not commit an unconsumed audio source",0,calls[0]);
+        assertEquals("Do not mark truncated source complete",0,calls[1]);
+        assertEquals("Explain provider failure",1,calls[2]);
     }
     @Override protected void tearDown()throws Exception{server.close();handler.join(2000);super.tearDown();}
 }
