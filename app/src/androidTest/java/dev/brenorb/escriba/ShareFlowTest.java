@@ -12,7 +12,7 @@ import java.net.*;
 import java.nio.charset.StandardCharsets;
 public class ShareFlowTest extends ActivityInstrumentationTestCase2<MainActivity> {
     public ShareFlowTest(){super(MainActivity.class);}
-    private ServerSocket server; private Thread handler; private volatile int requests; private volatile int delayMillis, responseCode=200, textRepeats=1;
+    private ServerSocket server; private Thread handler; private volatile int requests; private volatile int delayMillis, responseCode=200, textRepeats=1, busyResponses;
     @Override protected void setUp() throws Exception {
         super.setUp();
         server=new ServerSocket(0,8,InetAddress.getByName("127.0.0.1"));
@@ -27,7 +27,7 @@ public class ShareFlowTest extends ActivityInstrumentationTestCase2<MainActivity
             if(delayMillis>0)try{Thread.sleep(delayMillis);}catch(InterruptedException ignored){}
             String json="{\"text\":\""+("Trecho "+requests+" transcrito. ").repeat(textRepeats)+"\"}";
             byte[] data=json.getBytes(StandardCharsets.UTF_8);
-            s.getOutputStream().write(("HTTP/1.1 "+responseCode+" Test\r\nContent-Type: application/json\r\nContent-Length: "+data.length+"\r\nConnection: close\r\n\r\n").getBytes());s.getOutputStream().write(data);
+            s.getOutputStream().write(("HTTP/1.1 "+(requests<=busyResponses?503:responseCode)+" Test\r\nContent-Type: application/json\r\nContent-Length: "+data.length+"\r\nConnection: close\r\n\r\n").getBytes());s.getOutputStream().write(data);
         }catch(IOException ignored){}},"fixture-server");handler.start();
     }
     private void fixture(String name)throws Exception{
@@ -42,7 +42,7 @@ public class ShareFlowTest extends ActivityInstrumentationTestCase2<MainActivity
     private String text(MainActivity a,int id){final String[] s={""};getInstrumentation().runOnMainSync(()->s[0]=((TextView)a.findViewById(id)).getText().toString());return s[0];}
     private void waitDone(MainActivity a)throws Exception{
         long limit=System.currentTimeMillis()+30000;
-        while(System.currentTimeMillis()<limit){if(text(a,MainActivity.STATUS_ID).startsWith("Concluído"))return;Thread.sleep(100);}
+        while(System.currentTimeMillis()<limit){String status=text(a,MainActivity.STATUS_ID);if(status.startsWith("Concluído"))return;if(status.startsWith("Não foi possível"))fail("Unexpected terminal error: "+status);Thread.sleep(100);}
         fail("Completion not reached: "+text(a,MainActivity.STATUS_ID));
     }
     public void testOpusAutoStartsAndPublishesOrderedChunks()throws Exception{
@@ -112,6 +112,29 @@ public class ShareFlowTest extends ActivityInstrumentationTestCase2<MainActivity
         long limit=System.currentTimeMillis()+15000;
         while(System.currentTimeMillis()<limit && !text(a,MainActivity.STATUS_ID).startsWith("Não foi possível"))Thread.sleep(50);
         assertTrue(text(a,MainActivity.STATUS_ID).contains("HTTP 401"));assertEquals("",text(a,MainActivity.TRANSCRIPT_ID));
+    }
+    public void testBusyServerRetriesWithoutUserInteraction()throws Exception{
+        busyResponses=1;MainActivity a=share("short.mp3");waitDone(a);
+        assertEquals("Retry exactly the busy request",2,requests);
+        assertTrue(text(a,MainActivity.TRANSCRIPT_ID).contains("Trecho 2"));
+        assertFalse(text(a,MainActivity.TRANSCRIPT_ID).contains("Trecho 1"));
+    }
+    public void testCancelWhileBackendBusyStopsRetries()throws Exception{
+        responseCode=503;MainActivity a=share("short.mp3");waitRequest();
+        getInstrumentation().runOnMainSync(()->button(a.getWindow().getDecorView(),"Parar").performClick());
+        Thread.sleep(1800);
+        assertTrue(text(a,MainActivity.STATUS_ID).startsWith("Interrompido"));
+        assertEquals("No retry after cancellation",1,requests);assertEquals("",text(a,MainActivity.TRANSCRIPT_ID));
+    }
+    public void testCopyExportsCommittedTextWithoutTimestamps()throws Exception{
+        MainActivity a=share("short.mp3");waitDone(a);
+        String[] copied={""};
+        getInstrumentation().runOnMainSync(()->{
+            button(a.getWindow().getDecorView(),"Copiar").performClick();
+            android.content.ClipboardManager manager=(android.content.ClipboardManager)a.getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+            copied[0]=manager.getPrimaryClip().getItemAt(0).getText().toString();
+        });
+        assertEquals("Trecho 1 transcrito.",copied[0]);
     }
     public void testNativeEarlyCompletionIsRejected()throws Exception{
         int[] calls=new int[3];
