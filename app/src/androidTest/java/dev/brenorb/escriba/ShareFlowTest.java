@@ -279,21 +279,41 @@ public class ShareFlowTest extends ActivityInstrumentationTestCase2<MainActivity
         try(java.io.InputStream input=new android.os.ParcelFileDescriptor.AutoCloseInputStream(getInstrumentation().getUiAutomation().executeShellCommand(command))){input.readAllBytes();}
     }
     public void testLandscapeLeavesRoomForReading()throws Exception{
-        MainActivity a=share("short.mp3");waitDone(a);
+        MainActivity original=share("short.mp3");waitDone(original);
+        android.app.Instrumentation.ActivityMonitor monitor=getInstrumentation().addMonitor(MainActivity.class.getName(),null,false);
+        MainActivity current=original;
         try{
             shell("settings put system font_scale 1.5");
-            getInstrumentation().runOnMainSync(()->a.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE));
-            long limit=System.currentTimeMillis()+3000;while(a.getResources().getConfiguration().orientation!=android.content.res.Configuration.ORIENTATION_LANDSCAPE&&System.currentTimeMillis()<limit)Thread.sleep(50);
-            assertEquals("Actual landscape configuration required",android.content.res.Configuration.ORIENTATION_LANDSCAPE,a.getResources().getConfiguration().orientation);Thread.sleep(500);
-            int[] dimensions=new int[2];
-            getInstrumentation().runOnMainSync(()->{
-                View view=a.findViewById(MainActivity.TRANSCRIPT_ID);
-                while(view!=null&&!(view instanceof android.widget.ScrollView))view=view.getParent() instanceof View?(View)view.getParent():null;
-                if(view!=null)dimensions[0]=view.getHeight();dimensions[1]=a.getWindow().getDecorView().getHeight();
-            });
+            android.app.Activity replacement=monitor.waitForActivityWithTimeout(2500);
+            if(replacement!=null)current=(MainActivity)replacement;
+            assertFalse("Measure the active Activity rather than a destroyed pre-font-scale instance",current.isDestroyed());
+            MainActivity active=current;
+            getInstrumentation().runOnMainSync(()->active.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE));
+            int[] dimensions=new int[3];long limit=System.currentTimeMillis()+5000;
+            do{
+                getInstrumentation().waitForIdleSync();
+                getInstrumentation().runOnMainSync(()->{
+                    View view=active.findViewById(MainActivity.TRANSCRIPT_ID);
+                    while(view!=null&&!(view instanceof android.widget.ScrollView))view=view.getParent() instanceof View?(View)view.getParent():null;
+                    if(view!=null)dimensions[0]=view.getHeight();dimensions[1]=active.getWindow().getDecorView().getHeight();dimensions[2]=active.getWindow().getDecorView().getWidth();
+                });
+                if(dimensions[2]>dimensions[1]&&active.getResources().getConfiguration().orientation==android.content.res.Configuration.ORIENTATION_LANDSCAPE)break;
+                Thread.sleep(50);
+            }while(System.currentTimeMillis()<limit);
+            android.util.Log.i("EscribaAdversarial","font-scale recreation originalDestroyed="+original.isDestroyed()+" activeChanged="+(active!=original)+" oldDecor="+original.getWindow().getDecorView().getWidth()+"x"+original.getWindow().getDecorView().getHeight()+" actual="+dimensions[2]+"x"+dimensions[1]+" reading="+dimensions[0]);
+            assertEquals("Actual landscape configuration required",android.content.res.Configuration.ORIENTATION_LANDSCAPE,active.getResources().getConfiguration().orientation);
+            assertTrue("Actual landscape layout width must exceed height",dimensions[2]>dimensions[1]);
+            assertTrue("Font scale must actually apply",active.getResources().getConfiguration().fontScale>=1.45f);
             assertTrue("Reading pane must occupy half landscape viewport; reading="+dimensions[0]+" viewport="+dimensions[1],dimensions[0]>=dimensions[1]/2);
-
-        }finally{getInstrumentation().runOnMainSync(()->a.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT));shell("wm user-rotation lock 0");shell("settings put system font_scale 1.0");getInstrumentation().waitForIdleSync();Thread.sleep(500);}
+        }finally{
+            MainActivity active=current;
+            getInstrumentation().runOnMainSync(()->active.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT));
+            shell("wm user-rotation lock 0");shell("settings put system font_scale 1.0");
+            android.app.Activity reset=monitor.waitForActivityWithTimeout(2500);
+            if(reset!=null)getInstrumentation().runOnMainSync(reset::finish);
+            if(active!=original)getInstrumentation().runOnMainSync(active::finish);
+            getInstrumentation().removeMonitor(monitor);getInstrumentation().waitForIdleSync();Thread.sleep(300);
+        }
     }
     public void testNativeReconnectCanBeCancelledBeforeDelayedRetry()throws Exception{
         MainActivity a=nativeShare();NativeEngine.Listener listener=nativeUi(a);
