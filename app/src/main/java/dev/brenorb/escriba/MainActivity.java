@@ -23,8 +23,12 @@ public class MainActivity extends Activity {
   private RemoteEngine remote;
   private NativeEngine nativeEngine;
   private long generation;
+  private int nativeRetries;
+  private final Handler reconnect = new Handler(Looper.getMainLooper());
   private Uri currentUri;
   private boolean running;
+  private boolean voiceVisible, voiceDownloadable, voiceInstalling;
+  private String voiceAction = "Instalar voz e continuar";
   private SharedPreferences prefs;
   private int foreground, muted, background;
 
@@ -71,6 +75,7 @@ public class MainActivity extends Activity {
     Button b = new Button(this);
     b.setText(text);
     b.setAllCaps(false);
+    styleSecondary(b);
     b.setOnClickListener(v -> action.run());
     return b;
   }
@@ -92,7 +97,9 @@ public class MainActivity extends Activity {
                 ? 0
                 : View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
     LinearLayout root = new LinearLayout(this);
-    root.setOrientation(LinearLayout.VERTICAL);
+    boolean landscape =
+        getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
+    root.setOrientation(landscape ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
     root.setBackgroundColor(background);
     root.setPadding(dp(20), dp(12), dp(20), dp(12));
     root.setOnApplyWindowInsetsListener(
@@ -101,19 +108,35 @@ public class MainActivity extends Activity {
           v.setPadding(dp(20) + i.left, dp(12) + i.top, dp(20) + i.right, dp(12) + i.bottom);
           return insets;
         });
+    LinearLayout panel = root;
+    if (landscape) {
+      panel = new LinearLayout(this);
+      panel.setOrientation(LinearLayout.VERTICAL);
+      ScrollView sidebar = new ScrollView(this);
+      sidebar.setFillViewport(true);
+      sidebar.addView(panel);
+      int sideWidth =
+          Math.min(dp(300), (int) (getResources().getDisplayMetrics().widthPixels * 0.4f));
+      LinearLayout.LayoutParams sideParams = new LinearLayout.LayoutParams(sideWidth, -1);
+      sideParams.rightMargin = dp(20);
+      root.addView(sidebar, sideParams);
+    }
     LinearLayout header = new LinearLayout(this);
     header.setGravity(Gravity.CENTER_VERTICAL);
     TextView brand = label("escriba", 26, foreground);
     header.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
     overflow = button("⋮", this::menu);
     overflow.setContentDescription("Mais opções");
-    header.addView(overflow);
-    root.addView(header);
+    overflow.setMinWidth(dp(48));
+    overflow.setMinimumWidth(dp(48));
+    overflow.setPadding(dp(12), 0, dp(12), 0);
+    header.addView(overflow, new LinearLayout.LayoutParams(dp(48), dp(48)));
+    panel.addView(header);
     title = label("Áudio vira leitura", 25, foreground);
     title.setPadding(0, dp(24), 0, dp(8));
     title.setMaxLines(2);
     title.setEllipsize(android.text.TextUtils.TruncateAt.END);
-    root.addView(title);
+    panel.addView(title);
     status =
         label(
             "Compartilhe um áudio do WhatsApp, Telegram ou Signal. A transcrição começa ao chegar.",
@@ -129,7 +152,7 @@ public class MainActivity extends Activity {
     LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(-1, -2);
     statusParams.bottomMargin = dp(18);
     status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
-    root.addView(status, statusParams);
+    panel.addView(status, statusParams);
     ScrollView scroll = new ScrollView(this);
     scroll.setFillViewport(true);
     LinearLayout page = new LinearLayout(this);
@@ -146,7 +169,8 @@ public class MainActivity extends Activity {
     partial.setLineSpacing(dp(5), 1.1f);
     page.addView(partial, new LinearLayout.LayoutParams(-1, -2));
     scroll.addView(page);
-    root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+    if (landscape) root.addView(scroll, new LinearLayout.LayoutParams(0, -1, 1));
+    else root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
     LinearLayout controls = new LinearLayout(this);
     controls.setGravity(Gravity.CENTER);
     copy =
@@ -176,10 +200,12 @@ public class MainActivity extends Activity {
               status.setText("Interrompido. Texto já concluído preservado.");
               render();
             });
-    controls.addView(copy, new LinearLayout.LayoutParams(0, -2, 1));
-    controls.addView(share, new LinearLayout.LayoutParams(0, -2, 1));
-    controls.addView(stop, new LinearLayout.LayoutParams(0, -2, 1));
-    root.addView(controls);
+    for (Button action : new Button[] {copy, share, stop}) {
+      LinearLayout.LayoutParams actionParams = new LinearLayout.LayoutParams(0, -2, 1);
+      actionParams.setMargins(dp(3), 0, dp(3), dp(8));
+      controls.addView(action, actionParams);
+    }
+    panel.addView(controls);
     retry =
         button(
             "Escolher áudio",
@@ -188,30 +214,66 @@ public class MainActivity extends Activity {
               else pick();
             });
     stylePrimary(retry);
-    root.addView(retry);
+    panel.addView(retry);
     downloadVoice =
         button(
             "Instalar voz e continuar",
             () -> {
               if (nativeEngine == null) return;
-              downloadVoice.setEnabled(false);
+              showDownloadStatus("Pedindo ao Android para instalar a voz…", false);
               nativeEngine.downloadModel();
             });
     stylePrimary(downloadVoice);
-    downloadVoice.setVisibility(View.GONE);
-    root.addView(downloadVoice);
+    panel.addView(downloadVoice);
     setContentView(root);
     render();
   }
 
-  private void stylePrimary(Button button) {
+  private android.graphics.drawable.GradientDrawable rounded(int color) {
     android.graphics.drawable.GradientDrawable shape =
         new android.graphics.drawable.GradientDrawable();
-    shape.setColor(Color.parseColor("#246B4C"));
+    shape.setColor(color);
     shape.setCornerRadius(dp(18));
-    button.setBackground(shape);
-    button.setTextColor(Color.WHITE);
+    return shape;
+  }
+
+  private void styleControl(Button button, int fill, int text, int disabledFill, int disabledText) {
+    android.graphics.drawable.StateListDrawable colors =
+        new android.graphics.drawable.StateListDrawable();
+    colors.addState(new int[] {-android.R.attr.state_enabled}, rounded(disabledFill));
+    colors.addState(new int[] {}, rounded(fill));
+    android.content.res.ColorStateList ink =
+        new android.content.res.ColorStateList(
+            new int[][] {new int[] {-android.R.attr.state_enabled}, new int[] {}},
+            new int[] {disabledText, text});
+    button.setBackground(
+        new android.graphics.drawable.RippleDrawable(
+            android.content.res.ColorStateList.valueOf(Color.parseColor("#306F9B7F")),
+            colors,
+            rounded(Color.WHITE)));
+    button.setTextColor(ink);
     button.setMinHeight(dp(54));
+    button.setPadding(dp(8), dp(8), dp(8), dp(8));
+  }
+
+  private void styleSecondary(Button button) {
+    boolean dark = background == Color.parseColor("#141C19");
+    styleControl(
+        button,
+        Color.parseColor(dark ? "#26382E" : "#E5EEE8"),
+        foreground,
+        Color.parseColor(dark ? "#202B25" : "#EDF1EE"),
+        Color.parseColor(dark ? "#778B7E" : "#87948C"));
+  }
+
+  private void stylePrimary(Button button) {
+    boolean dark = background == Color.parseColor("#141C19");
+    styleControl(
+        button,
+        Color.parseColor("#246B4C"),
+        Color.WHITE,
+        Color.parseColor(dark ? "#26382E" : "#DFE6E1"),
+        Color.parseColor(dark ? "#88998F" : "#6E7F75"));
     button.setPadding(dp(20), dp(8), dp(20), dp(8));
   }
 
@@ -222,6 +284,9 @@ public class MainActivity extends Activity {
       int index = i;
       menu.getMenu()
           .add("Usar " + ModelCatalog.labelAt(i))
+          .setCheckable(true)
+          .setChecked(
+              ModelCatalog.idAt(i).equals(prefs.getString("model", ModelCatalog.defaultId())))
           .setOnMenuItemClickListener(
               item -> {
                 chooseModel(ModelCatalog.idAt(index));
@@ -265,7 +330,8 @@ public class MainActivity extends Activity {
                 + ModelCatalog.labelAt(ModelCatalog.indexOf(model))
                 + " pré-selecionado. Configure o servidor HTTPS em Ajustes uma vez.";
     Toast.makeText(this, message, Toast.LENGTH_LONG).show();
-    status.setText(message);
+    if (serverReady && currentUri != null) begin();
+    else if (!running) status.setText(message);
   }
 
   private void pick() {
@@ -307,6 +373,7 @@ public class MainActivity extends Activity {
     else if (Intent.ACTION_SEND_MULTIPLE.equals(intent.getAction())) {
       cancel();
       status.setText("Compartilhe um áudio por vez.");
+      render();
       return;
     }
     if (uri == null) {
@@ -314,6 +381,7 @@ public class MainActivity extends Activity {
           || Intent.ACTION_VIEW.equals(intent.getAction())) {
         cancel();
         status.setText("O compartilhamento não contém um arquivo de áudio.");
+        render();
       }
       return;
     }
@@ -346,9 +414,13 @@ public class MainActivity extends Activity {
   }
 
   private void begin() {
+    begin(false);
+  }
+
+  private void begin(boolean reconnecting) {
+    if (!reconnecting) nativeRetries = 0;
     if (currentUri == null) return;
     cancel();
-    downloadVoice.setVisibility(View.GONE);
     state = new Transcript();
     running = true;
     render();
@@ -372,6 +444,13 @@ public class MainActivity extends Activity {
                     if (ticket != generation) return;
                     state.commit(text, start, end);
                     render();
+                  });
+            }
+
+            public void status(String text) {
+              runOnUiThread(
+                  () -> {
+                    if (ticket == generation) status.setText(text);
                   });
             }
 
@@ -420,24 +499,31 @@ public class MainActivity extends Activity {
                   failed(ticket, text);
                 }
 
+                public void disconnected() {
+                  runOnUiThread(
+                      () -> {
+                        if (ticket != generation) return;
+                        if (nativeRetries++ >= 3) {
+                          failed(
+                              ticket,
+                              "O serviço Android continua indisponível. Tente novamente ou"
+                                  + " configure o servidor.");
+                          return;
+                        }
+                        status.setText("Reconectando ao serviço de voz Android…");
+                        reconnect.postDelayed(
+                            () -> {
+                              if (ticket == generation) begin(true);
+                            },
+                            750);
+                      });
+                }
+
                 public void modelUnavailable(boolean canDownload) {
                   runOnUiThread(
                       () -> {
                         if (ticket != generation) return;
-                        running = false;
-                        downloadVoice.setText(
-                            canDownload
-                                ? "Instalar voz e continuar"
-                                : "Voz indisponível neste aparelho");
-                        downloadVoice.setEnabled(canDownload);
-                        downloadVoice.setVisibility(View.VISIBLE);
-                        status.setText(
-                            canDownload
-                                ? "O Android pode baixar a voz em português. Toque uma vez; quando"
-                                    + " terminar, a transcrição continua sozinha."
-                                : "O serviço de voz deste aparelho não oferece português offline."
-                                    + " Configure o servidor em Ajustes.");
-                        render();
+                        showVoiceUnavailable(canDownload);
                       });
                 }
 
@@ -445,10 +531,7 @@ public class MainActivity extends Activity {
                   runOnUiThread(
                       () -> {
                         if (ticket != generation) return;
-                        status.setText(text);
-                        downloadVoice.setEnabled(finished);
-                        downloadVoice.setText(
-                            finished ? "Tentar instalar voz novamente" : "Instalando voz…");
+                        showDownloadStatus(text, finished);
                       });
                 }
 
@@ -456,13 +539,40 @@ public class MainActivity extends Activity {
                   runOnUiThread(
                       () -> {
                         if (ticket != generation) return;
+                        voiceVisible = voiceDownloadable = voiceInstalling = false;
+                        running = true;
                         status.setText("Voz pronta. Continuando a transcrição…");
-                        begin();
+                        render();
                       });
                 }
               });
       nativeEngine.start(currentUri, language);
     }
+  }
+
+  private void showVoiceUnavailable(boolean canDownload) {
+    running = false;
+    voiceVisible = true;
+    voiceDownloadable = canDownload;
+    voiceInstalling = false;
+    voiceAction = canDownload ? "Instalar voz e continuar" : "Voz indisponível neste aparelho";
+    status.setText(
+        canDownload
+            ? "O Android pode baixar o idioma escolhido. Toque uma vez; quando terminar, a"
+                + " transcrição continua sozinha."
+            : "O serviço de voz deste aparelho não oferece o idioma escolhido offline. Configure o"
+                + " servidor em Ajustes.");
+    render();
+  }
+
+  private void showDownloadStatus(String text, boolean finished) {
+    voiceVisible = true;
+    voiceDownloadable = true;
+    voiceInstalling = !finished;
+    running = !finished;
+    voiceAction = finished ? "Tentar instalar voz novamente" : "Instalando voz…";
+    status.setText(text);
+    render();
   }
 
   private void complete(long ticket) {
@@ -472,7 +582,9 @@ public class MainActivity extends Activity {
     status.setText(
         state.copyText().isEmpty()
             ? "Concluído. Nenhuma fala reconhecida."
-            : "Concluído · " + state.segments().size() + " trechos");
+            : "Concluído · "
+                + state.segments().size()
+                + (state.segments().size() == 1 ? " trecho" : " trechos"));
     render();
   }
 
@@ -486,7 +598,9 @@ public class MainActivity extends Activity {
 
   private void cancel() {
     generation++;
+    reconnect.removeCallbacksAndMessages(null);
     running = false;
+    voiceVisible = voiceDownloadable = voiceInstalling = false;
     if (remote != null) {
       remote.cancel();
       remote = null;
@@ -510,6 +624,9 @@ public class MainActivity extends Activity {
     partial.setText(state.provisional().isEmpty() ? "" : "Prévia · " + state.provisional());
     copy.setEnabled(!state.copyText().isEmpty());
     share.setEnabled(!state.copyText().isEmpty());
+    downloadVoice.setVisibility(voiceVisible ? View.VISIBLE : View.GONE);
+    downloadVoice.setEnabled(voiceDownloadable && !voiceInstalling);
+    downloadVoice.setText(voiceAction);
     stop.setEnabled(running);
     retry.setEnabled(!running);
     retry.setText(currentUri == null ? "Escolher áudio" : "Tentar novamente");
@@ -534,8 +651,11 @@ public class MainActivity extends Activity {
   }
 
   private EditText edit(LinearLayout box, String name, String value, boolean secret) {
-    box.addView(label(name, 14, muted));
+    TextView caption = label(name, 14, muted);
+    box.addView(caption);
     EditText field = new EditText(this);
+    field.setId(View.generateViewId());
+    caption.setLabelFor(field.getId());
     field.setText(value);
     field.setTextColor(foreground);
     field.setSingleLine(true);

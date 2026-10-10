@@ -23,6 +23,10 @@ public final class NativeEngine implements RecognitionListener {
     default void downloadStatus(String text, boolean finished) {}
 
     default void modelReady() {}
+
+    default void disconnected() {
+      error("O serviço de voz Android desconectou. Tente novamente.");
+    }
   }
 
   private final Context context;
@@ -35,10 +39,21 @@ public final class NativeEngine implements RecognitionListener {
   private volatile boolean sourceComplete;
   private int segments;
   private Intent request;
+  private Uri sourceUri;
   private String requestedLanguage;
   private boolean downloadRequested;
   private int downloadChecks;
   private final Runnable checkDownload = this::checkDownload;
+  private final Runnable downloadTimeout = this::timeoutModelDownload;
+
+  private void timeoutModelDownload() {
+    if (cancelled || !downloadRequested) return;
+    downloadRequested = false;
+    main.removeCallbacks(checkDownload);
+    listener.downloadStatus(
+        "O Android ainda não concluiu a instalação. Tente novamente quando houver conexão.", true);
+  }
+
   private final Runnable timeout =
       () -> fail("O serviço Android não respondeu. Tente outro idioma ou configure o servidor.");
 
@@ -49,6 +64,7 @@ public final class NativeEngine implements RecognitionListener {
 
   public void start(Uri uri, String language) {
     try {
+      sourceUri = uri;
       requestedLanguage = language;
       if (!SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) {
         fail("Reconhecimento local indisponível neste aparelho. Configure um servidor em Ajustes.");
@@ -88,15 +104,14 @@ public final class NativeEngine implements RecognitionListener {
                 listener.modelUnavailable(canDownload);
                 return;
               }
-              try {
-                recognizer.startListening(request);
-                feed(uri);
-              } catch (Exception e) {
-                fail("O serviço Android não aceita este arquivo. Use o servidor em Ajustes.");
-              }
+              listen();
             }
 
             public void onError(int error) {
+              if (error == SpeechRecognizer.ERROR_SERVER_DISCONNECTED) {
+                failDisconnected();
+                return;
+              }
               if (!cancelled)
                 fail(
                     "O serviço Android não confirmou suporte a arquivos ("
@@ -109,10 +124,23 @@ public final class NativeEngine implements RecognitionListener {
     }
   }
 
+  private void listen() {
+    if (cancelled) return;
+    try {
+      armTimeout();
+      recognizer.startListening(request);
+      feed(sourceUri);
+    } catch (Exception e) {
+      fail("O serviço Android não aceita este arquivo. Use o servidor em Ajustes.");
+    }
+  }
+
   public void downloadModel() {
     if (cancelled || recognizer == null || request == null) return;
     downloadRequested = true;
     downloadChecks = 0;
+    main.removeCallbacks(downloadTimeout);
+    main.postDelayed(downloadTimeout, 300000);
     listener.downloadStatus("Pedindo ao Android para instalar a voz…", false);
     try {
       if (Build.VERSION.SDK_INT >= 34) {
@@ -121,12 +149,12 @@ public final class NativeEngine implements RecognitionListener {
             context.getMainExecutor(),
             new ModelDownloadListener() {
               public void onProgress(int completedPercent) {
-                if (!cancelled)
+                if (!cancelled && downloadRequested)
                   listener.downloadStatus("Baixando voz… " + completedPercent + "%", false);
               }
 
               public void onScheduled() {
-                if (!cancelled)
+                if (!cancelled && downloadRequested)
                   listener.downloadStatus("Download agendado pelo Android. Aguardando…", false);
               }
 
@@ -135,9 +163,10 @@ public final class NativeEngine implements RecognitionListener {
               }
 
               public void onError(int error) {
-                if (!cancelled) {
+                if (!cancelled && downloadRequested) {
                   downloadRequested = false;
                   main.removeCallbacks(checkDownload);
+                  main.removeCallbacks(downloadTimeout);
                   listener.downloadStatus(
                       "O Android não conseguiu baixar a voz ("
                           + error
@@ -203,7 +232,9 @@ public final class NativeEngine implements RecognitionListener {
     if (!downloadRequested || cancelled) return;
     downloadRequested = false;
     main.removeCallbacks(checkDownload);
+    main.removeCallbacks(downloadTimeout);
     listener.modelReady();
+    listen();
   }
 
   private void feed(Uri uri) {
@@ -237,6 +268,7 @@ public final class NativeEngine implements RecognitionListener {
     cancelled = true;
     main.removeCallbacks(timeout);
     main.removeCallbacks(checkDownload);
+    main.removeCallbacks(downloadTimeout);
     try {
       if (output != null) output.close();
     } catch (Exception ignored) {
@@ -252,6 +284,12 @@ public final class NativeEngine implements RecognitionListener {
       recognizer.destroy();
       recognizer = null;
     }
+  }
+
+  private void failDisconnected() {
+    if (cancelled) return;
+    cancel();
+    listener.disconnected();
   }
 
   private void fail(String message) {
@@ -311,17 +349,19 @@ public final class NativeEngine implements RecognitionListener {
   }
 
   public void onError(int code) {
-    if (code == SpeechRecognizer.ERROR_NO_MATCH) {
+    if (code == SpeechRecognizer.ERROR_SERVER_DISCONNECTED) {
+      failDisconnected();
+    } else if (code == SpeechRecognizer.ERROR_NO_MATCH) {
       fail(
-          "O Android não encontrou fala reconhecível neste áudio. Confira se há voz clara em"
-              + " português.");
+          "O Android não encontrou fala reconhecível neste áudio. Confira se há voz clara e se o"
+              + " idioma escolhido está correto.");
     } else if (code == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
       fail("O Android não detectou fala neste áudio. Confira o volume e tente novamente.");
     } else if (code == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED
         || code == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE) {
       fail(
-          "O serviço Android não tem esse idioma pronto. Use “Instalar voz e continuar” ou o"
-              + " servidor.");
+          "O serviço Android não tem esse idioma pronto. Tente novamente para verificar a"
+              + " instalação ou configure o servidor.");
     } else if (code == SpeechRecognizer.ERROR_AUDIO) {
       fail("O Android não conseguiu ler o áudio. Tente outro formato ou use o servidor.");
     } else {

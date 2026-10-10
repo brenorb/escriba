@@ -112,9 +112,11 @@ public final class RemoteEngine {
     int delay = 500;
     while (!cancelled) {
       try {
-        listener.status(offset == 0
-            ? "Preparando transcrição no servidor… No primeiro uso, baixar o modelo pode levar alguns minutos."
-            : "Transcrevendo o próximo trecho…");
+        listener.status(
+            offset == 0
+                ? "Preparando transcrição no servidor… No primeiro uso, baixar o modelo pode levar"
+                    + " alguns minutos."
+                : "Transcrevendo o próximo trecho…");
         String text = request(endpoint, token, boundary, body);
         if (!cancelled) listener.segment(text, offset / 32000.0, (offset + pcm.length) / 32000.0);
         return;
