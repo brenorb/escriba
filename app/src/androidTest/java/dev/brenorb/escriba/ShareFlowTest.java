@@ -136,6 +136,28 @@ public class ShareFlowTest extends ActivityInstrumentationTestCase2<MainActivity
         });
         assertEquals("Trecho 1 transcrito.",copied[0]);
     }
+    private android.view.accessibility.AccessibilityNodeInfo node(android.view.accessibility.AccessibilityNodeInfo root,String text){
+        if(root==null)return null;
+        if(text.contentEquals(root.getText()==null?"":root.getText()))return root;
+        for(int i=0;i<root.getChildCount();i++){android.view.accessibility.AccessibilityNodeInfo n=node(root.getChild(i),text);if(n!=null)return n;}
+        return null;
+    }
+    private android.view.accessibility.AccessibilityNodeInfo waitNode(String text)throws Exception{
+        long limit=System.currentTimeMillis()+3000;
+        while(System.currentTimeMillis()<limit){android.view.accessibility.AccessibilityNodeInfo n=node(getInstrumentation().getUiAutomation().getRootInActiveWindow(),text);if(n!=null)return n;Thread.sleep(50);}
+        fail("Visible UI text not found: "+text);return null;
+    }
+    public void testSettingsMenuIsReachable()throws Exception{
+        setActivityIntent(new Intent(Intent.ACTION_MAIN));MainActivity a=getActivity();
+        getInstrumentation().runOnMainSync(()->button(a.getWindow().getDecorView(),"⋮").performClick());
+        getInstrumentation().waitForIdleSync();
+        android.view.accessibility.AccessibilityNodeInfo settings=waitNode("Ajustes");
+        android.graphics.Rect bounds=new android.graphics.Rect();settings.getBoundsInScreen(bounds);
+        assertTrue("Settings menu item must be visible on screen",bounds.height()>0);
+        assertTrue(settings.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK));
+        getInstrumentation().waitForIdleSync();
+        assertNotNull(waitNode("URL completa de transcrição"));assertNotNull(waitNode("Salvar"));
+    }
     public void testNativeEarlyCompletionIsRejected()throws Exception{
         int[] calls=new int[3];
         getInstrumentation().runOnMainSync(()->{
