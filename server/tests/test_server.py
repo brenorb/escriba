@@ -35,6 +35,20 @@ class Contracts(unittest.TestCase):
         body=b'--x\r\nContent-Disposition: form-data; name="model"\r\n\r\nparakeet-redux\r\n--x--\r\n'
         self.assertEqual(request_options('multipart/form-data; boundary=x',body,'parakeet-v3-int8'),'parakeet-redux')
         with self.assertRaises(ValueError): request_options('multipart/form-data; boundary=x',body.replace(b'parakeet-redux',b'../../bad'),'parakeet-v3-int8')
+    def test_tiny_tail_is_padded_before_real_backend(self):
+        def inference(argv, **kwargs):
+            with wave.open(argv[1], 'rb') as source:
+                self.assertGreaterEqual(source.getnframes(), 16000, 'Tiny final windows need enough samples for model feature extraction')
+                self.assertEqual(source.getframerate(), 16000)
+                self.assertEqual(source.getnchannels(), 1)
+                self.assertEqual(source.readframes(160), b'\x01\x00' * 160, 'Preserve original audio samples')
+                self.assertEqual(source.readframes(source.getnframes() - 160), b'\x00\x00' * (source.getnframes() - 160), 'Only append silence')
+            import subprocess
+            return subprocess.CompletedProcess(argv, 0, stdout='')
+        with patch('server.escriba_server.subprocess.run', side_effect=inference):
+            audio = bytearray(wav()); audio[44:] = b'\x01\x00' * 160
+            self.assertEqual(transcribe(bytes(audio), 'parakeet-redux', 'cpu', 'fscript'), '')
+
     def test_invalid_model_rejected(self):
         with self.assertRaises(ValueError): transcribe(wav(),'../../bad','cpu','fscript')
     def test_backend_failure_not_a_transcript(self):
