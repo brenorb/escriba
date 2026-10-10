@@ -18,7 +18,7 @@ import java.util.Locale;
 public class MainActivity extends Activity {
   public static final int STATUS_ID = 1001, TRANSCRIPT_ID = 1002;
   private TextView status, transcript, partial, title;
-  private Button copy, share, stop, retry, overflow;
+  private Button copy, share, stop, retry, overflow, downloadVoice;
   private Transcript state = new Transcript();
   private RemoteEngine remote;
   private NativeEngine nativeEngine;
@@ -32,6 +32,14 @@ public class MainActivity extends Activity {
   public void onCreate(Bundle saved) {
     super.onCreate(saved);
     prefs = getSharedPreferences("settings", MODE_PRIVATE);
+    if (!prefs.getBoolean("compactModelMigrationDone", false)) {
+      SharedPreferences.Editor migration =
+          prefs.edit().putBoolean("compactModelMigrationDone", true);
+      if ("parakeet-v3-int8".equals(prefs.getString("model", ""))) {
+        migration.putString("model", ModelCatalog.defaultId());
+      }
+      migration.apply();
+    }
     draw();
     if (saved != null) {
       String text = saved.getString("text", "");
@@ -112,9 +120,16 @@ public class MainActivity extends Activity {
             14,
             muted);
     status.setId(STATUS_ID);
-    status.setPadding(0, 0, 0, dp(20));
+    android.graphics.drawable.GradientDrawable statusCard =
+        new android.graphics.drawable.GradientDrawable();
+    statusCard.setColor(Color.parseColor(dark ? "#202B25" : "#EAF2EC"));
+    statusCard.setCornerRadius(dp(18));
+    status.setBackground(statusCard);
+    status.setPadding(dp(16), dp(14), dp(16), dp(14));
+    LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(-1, -2);
+    statusParams.bottomMargin = dp(18);
     status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
-    root.addView(status);
+    root.addView(status, statusParams);
     ScrollView scroll = new ScrollView(this);
     scroll.setFillViewport(true);
     LinearLayout page = new LinearLayout(this);
@@ -172,14 +187,47 @@ public class MainActivity extends Activity {
               if (currentUri != null) begin();
               else pick();
             });
+    stylePrimary(retry);
     root.addView(retry);
+    downloadVoice =
+        button(
+            "Instalar voz e continuar",
+            () -> {
+              if (nativeEngine == null) return;
+              downloadVoice.setEnabled(false);
+              nativeEngine.downloadModel();
+            });
+    stylePrimary(downloadVoice);
+    downloadVoice.setVisibility(View.GONE);
+    root.addView(downloadVoice);
     setContentView(root);
     render();
+  }
+
+  private void stylePrimary(Button button) {
+    android.graphics.drawable.GradientDrawable shape =
+        new android.graphics.drawable.GradientDrawable();
+    shape.setColor(Color.parseColor("#246B4C"));
+    shape.setCornerRadius(dp(18));
+    button.setBackground(shape);
+    button.setTextColor(Color.WHITE);
+    button.setMinHeight(dp(54));
+    button.setPadding(dp(20), dp(8), dp(20), dp(8));
   }
 
   private void menu() {
     PopupMenu menu = new PopupMenu(this, overflow);
     menu.getMenu().add("Ajustes");
+    for (int i = 0; i < ModelCatalog.ids().length; i++) {
+      int index = i;
+      menu.getMenu()
+          .add("Usar " + ModelCatalog.labelAt(i))
+          .setOnMenuItemClickListener(
+              item -> {
+                chooseModel(ModelCatalog.idAt(index));
+                return true;
+              });
+    }
     menu.getMenu().add("Escolher outro áudio");
     menu.getMenu().add("Limpar texto");
     menu.setOnMenuItemClickListener(
@@ -202,6 +250,22 @@ public class MainActivity extends Activity {
           return true;
         });
     menu.show();
+  }
+
+  private void chooseModel(String model) {
+    SharedPreferences.Editor edit = prefs.edit().putString("model", model);
+    boolean serverReady = EndpointPolicy.valid(prefs.getString("endpoint", ""));
+    if (serverReady) edit.putString("engine", "remote");
+    edit.apply();
+    String message =
+        serverReady
+            ? ModelCatalog.labelAt(ModelCatalog.indexOf(model))
+                + " selecionado. O servidor baixa o modelo na primeira transcrição."
+            : ""
+                + ModelCatalog.labelAt(ModelCatalog.indexOf(model))
+                + " pré-selecionado. Configure o servidor HTTPS em Ajustes uma vez.";
+    Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+    status.setText(message);
   }
 
   private void pick() {
@@ -284,6 +348,7 @@ public class MainActivity extends Activity {
   private void begin() {
     if (currentUri == null) return;
     cancel();
+    downloadVoice.setVisibility(View.GONE);
     state = new Transcript();
     running = true;
     render();
@@ -298,7 +363,7 @@ public class MainActivity extends Activity {
           currentUri,
           prefs.getString("endpoint", ""),
           prefs.getString("token", ""),
-          prefs.getString("model", "parakeet-v3-int8"),
+          prefs.getString("model", ModelCatalog.defaultId()),
           language.split("-")[0],
           new RemoteEngine.Listener() {
             public void segment(String text, double start, double end) {
@@ -353,6 +418,47 @@ public class MainActivity extends Activity {
 
                 public void error(String text) {
                   failed(ticket, text);
+                }
+
+                public void modelUnavailable(boolean canDownload) {
+                  runOnUiThread(
+                      () -> {
+                        if (ticket != generation) return;
+                        running = false;
+                        downloadVoice.setText(
+                            canDownload
+                                ? "Instalar voz e continuar"
+                                : "Voz indisponível neste aparelho");
+                        downloadVoice.setEnabled(canDownload);
+                        downloadVoice.setVisibility(View.VISIBLE);
+                        status.setText(
+                            canDownload
+                                ? "O Android pode baixar a voz em português. Toque uma vez; quando"
+                                    + " terminar, a transcrição continua sozinha."
+                                : "O serviço de voz deste aparelho não oferece português offline."
+                                    + " Configure o servidor em Ajustes.");
+                        render();
+                      });
+                }
+
+                public void downloadStatus(String text, boolean finished) {
+                  runOnUiThread(
+                      () -> {
+                        if (ticket != generation) return;
+                        status.setText(text);
+                        downloadVoice.setEnabled(finished);
+                        downloadVoice.setText(
+                            finished ? "Tentar instalar voz novamente" : "Instalando voz…");
+                      });
+                }
+
+                public void modelReady() {
+                  runOnUiThread(
+                      () -> {
+                        if (ticket != generation) return;
+                        status.setText("Voz pronta. Continuando a transcrição…");
+                        begin();
+                      });
                 }
               });
       nativeEngine.start(currentUri, language);
@@ -465,8 +571,15 @@ public class MainActivity extends Activity {
     EditText endpoint =
         edit(box, "URL completa de transcrição", prefs.getString("endpoint", ""), false);
     EditText token = edit(box, "Chave / token (opcional)", prefs.getString("token", ""), true);
-    EditText model =
-        edit(box, "Modelo do endpoint", prefs.getString("model", "parakeet-v3-int8"), false);
+    box.addView(label("Modelo do servidor · baixa na primeira transcrição", 14, muted));
+    Spinner model = new Spinner(this);
+    model.setAdapter(
+        new ArrayAdapter<>(
+            this, android.R.layout.simple_spinner_dropdown_item, ModelCatalog.labels()));
+    int selectedModel = ModelCatalog.indexOf(prefs.getString("model", ModelCatalog.defaultId()));
+    model.setSelection(
+        selectedModel < 0 ? ModelCatalog.indexOf(ModelCatalog.defaultId()) : selectedModel);
+    box.addView(model);
     ScrollView scroll = new ScrollView(this);
     scroll.addView(box);
     AlertDialog dialog =
@@ -484,7 +597,7 @@ public class MainActivity extends Activity {
                     view -> {
                       String url = endpoint.getText().toString().trim(),
                           lang = language.getText().toString().trim(),
-                          m = model.getText().toString().trim(),
+                          m = ModelCatalog.idAt(model.getSelectedItemPosition()),
                           key = token.getText().toString().trim();
                       if (engine.getSelectedItemPosition() == 1
                           && (!EndpointPolicy.valid(url)
@@ -497,10 +610,6 @@ public class MainActivity extends Activity {
                       }
                       if (!lang.matches("[a-zA-Z]{2,3}(-[a-zA-Z]{2,4})?")) {
                         language.setError("Exemplo: pt-BR");
-                        return;
-                      }
-                      if (m.isEmpty() || m.contains("\n") || m.contains("\r")) {
-                        model.setError("Informe um modelo válido");
                         return;
                       }
                       if (key.contains("\n") || key.contains("\r")) {
