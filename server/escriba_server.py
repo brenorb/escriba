@@ -103,7 +103,7 @@ def handler_factory(model,device,binary,token):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--bind',default='127.0.0.1'); p.add_argument('--port',type=int,default=8765)
-    p.add_argument('--model',choices=sorted(MODELS),default='parakeet-v3-int8'); p.add_argument('--device',default='auto',choices=['auto','cpu','mps','mlx','cuda'])
+    p.add_argument('--model',choices=sorted(MODELS),default='parakeet-redux'); p.add_argument('--device',default='auto',choices=['auto','cpu','mps','mlx','cuda'])
     p.add_argument('--binary',default='fscript')
     a=p.parse_args(); token=os.environ.get('ESCRIBA_TOKEN','')
     if a.bind not in {'127.0.0.1','localhost','::1'} and not token: p.error('Set ESCRIBA_TOKEN when listening beyond loopback')
