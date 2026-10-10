@@ -503,6 +503,9 @@ public class MainActivity extends Activity {
                   runOnUiThread(
                       () -> {
                         if (ticket != generation) return;
+                        voiceVisible = voiceDownloadable = voiceInstalling = false;
+                        running = true;
+                        render();
                         if (nativeRetries++ >= 3) {
                           failed(
                               ticket,
