@@ -11,5 +11,5 @@ if [ ! -f .signing/release.jks ]; then
     chmod 600 .signing/release.jks
 fi
 "$ANDROID_HOME/build-tools/35.0.0/zipalign" -f -p 4 app/build/outputs/apk/release/app-release-unsigned.apk artifacts/escriba-aligned.apk
-"$ANDROID_HOME/build-tools/35.0.0/apksigner" sign --ks .signing/release.jks --ks-pass file:.signing/password --key-pass file:.signing/password --ks-key-alias escriba --out artifacts/escriba.apk artifacts/escriba-aligned.apk
+"$ANDROID_HOME/build-tools/35.0.0/apksigner" sign --ks .signing/release.jks --ks-pass file:.signing/password --ks-key-alias escriba --out artifacts/escriba.apk artifacts/escriba-aligned.apk
 "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose artifacts/escriba.apk
