@@ -1,5 +1,8 @@
 plugins { id 'com.android.application' }
 android {
+    useLibrary 'android.test.runner'
+    useLibrary 'android.test.base'
+    useLibrary 'android.test.mock'
     namespace 'dev.brenorb.escriba'
     compileSdk 35
     defaultConfig {

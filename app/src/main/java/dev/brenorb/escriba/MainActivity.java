@@ -63,7 +63,7 @@ public class MainActivity extends Activity {
     }
     private void menu(){PopupMenu menu=new PopupMenu(this,findViewById(android.R.id.content));menu.getMenu().add("Ajustes");menu.getMenu().add("Escolher outro áudio");menu.getMenu().add("Limpar texto");menu.setOnMenuItemClickListener(item->{switch(item.getTitle().toString()){case "Ajustes":settings();break;case "Escolher outro áudio":pick();break;default:cancel();state=new Transcript();currentUri=null;title.setText("Áudio vira leitura");status.setText("Texto limpo.");render();}return true;});menu.show();}
     private void pick(){startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*").putExtra(Intent.EXTRA_MIME_TYPES,new String[]{"audio/*","video/*","application/ogg","application/octet-stream"}),11);}
-    @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request==11&&result==RESULT_OK&&data!=null){intake(new Intent(Intent.ACTION_VIEW).setData(data.getData()).setType(getContentResolver().getType(data.getData())));}}
+    @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request==11&&result==RESULT_OK&&data!=null){intake(new Intent(Intent.ACTION_VIEW).setDataAndType(data.getData(),getContentResolver().getType(data.getData())));}}
     @Override public void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);intake(intent);}
     private void intake(Intent intent){
         if(intent==null)return;

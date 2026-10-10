@@ -39,6 +39,18 @@ def decode_request(content_type, body):
     return body
 
 
+def request_options(content_type, body, default_model):
+    model=default_model
+    if content_type.startswith('multipart/form-data'):
+        message=BytesParser(policy=default).parsebytes(('Content-Type: '+content_type+'\r\nMIME-Version: 1.0\r\n\r\n').encode()+body)
+        if message.is_multipart():
+            values=[part.get_payload(decode=True).decode('utf-8') for part in message.iter_parts() if part.get_param('name',header='content-disposition')=='model']
+            if len(values)>1: raise ValueError('Duplicate model field')
+            if values: model=values[0]
+    if model not in MODELS: raise ValueError('Unsupported model')
+    return model
+
+
 def transcribe(audio,model,device,binary):
     if model not in MODELS or device not in {'auto','cpu','mps','mlx','cuda'}: raise ValueError('Unsupported model/device')
     with tempfile.TemporaryDirectory(prefix='escriba-') as directory:
@@ -66,8 +78,9 @@ def handler_factory(model,device,binary,token):
                 body=self.rfile.read(size)
                 if len(body)!=size: raise ValueError('Truncated request')
                 audio=decode_request(self.headers.get('Content-Type',''),body)
+                selected=request_options(self.headers.get('Content-Type',''),body,model)
                 if not LOCK.acquire(blocking=False): return self.reply(503,{'error':'Backend busy; try again'})
-                try: text=transcribe(audio,model,device,binary)
+                try: text=transcribe(audio,selected,device,binary)
                 finally: LOCK.release()
                 self.reply(200,{'text':text})
             except ValueError as e: self.reply(400,{'error':str(e)})
