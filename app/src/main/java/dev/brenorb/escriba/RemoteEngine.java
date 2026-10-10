@@ -14,6 +14,8 @@ public final class RemoteEngine {
     void done();
 
     void error(String message);
+
+    default void status(String message) {}
   }
 
   private volatile boolean cancelled;
@@ -110,6 +112,9 @@ public final class RemoteEngine {
     int delay = 500;
     while (!cancelled) {
       try {
+        listener.status(offset == 0
+            ? "Preparando transcrição no servidor… No primeiro uso, baixar o modelo pode levar alguns minutos."
+            : "Transcrevendo o próximo trecho…");
         String text = request(endpoint, token, boundary, body);
         if (!cancelled) listener.segment(text, offset / 32000.0, (offset + pcm.length) / 32000.0);
         return;
@@ -135,7 +140,7 @@ public final class RemoteEngine {
     try {
       c.setInstanceFollowRedirects(false);
       c.setConnectTimeout(10000);
-      c.setReadTimeout(120000);
+      c.setReadTimeout(660000);
       c.setRequestMethod("POST");
       c.setDoOutput(true);
       c.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);

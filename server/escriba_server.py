@@ -8,6 +8,7 @@ import hmac
 import io
 import json
 import os
+import signal
 import subprocess
 import tempfile
 import threading
@@ -68,9 +69,24 @@ def transcribe(audio,model,device,binary):
         path=os.path.join(directory,'part.wav')
         with open(path,'wb') as f: f.write(audio)
         try:
-            result=subprocess.run([binary,path,'--text=plain','--stdout','--no-diarization','--raw','--chunk','0','--model',model,'--device',device],check=True,capture_output=True,text=True,timeout=120)
+            process=subprocess.Popen([binary,path,'--text=plain','--stdout','--no-diarization','--raw','--chunk','0','--model',model,'--device',device],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,start_new_session=os.name=='posix')
+            try:
+                # First use may provision a runtime and download model weights.
+                stdout,_=process.communicate(timeout=600)
+            except subprocess.TimeoutExpired:
+                if os.name=='posix':
+                    try: os.killpg(process.pid,signal.SIGKILL)
+                    except ProcessLookupError: pass
+                else:
+                    # taskkill also terminates the installer's descendants on Windows.
+                    subprocess.run(['taskkill','/PID',str(process.pid),'/T','/F'],capture_output=True,timeout=10)
+                    process.kill()
+                process.communicate()
+                raise
+            if process.returncode:
+                raise subprocess.CalledProcessError(process.returncode,[binary])
         except (OSError,subprocess.SubprocessError) as e: raise RuntimeError('ASR backend failed; check server installation/model') from e
-        return result.stdout.strip()
+        return stdout.strip()
 
 
 def handler_factory(model,device,binary,token):

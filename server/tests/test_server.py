@@ -24,8 +24,8 @@ class Contracts(unittest.TestCase):
     def test_reject_missing_file(self):
         with self.assertRaises(ValueError): decode_request('multipart/form-data; boundary=x',b'--x--\r\n')
     def test_command_is_argv_and_temp_audio_removed(self):
-        with patch('server.escriba_server.subprocess.run') as run:
-            run.return_value.stdout='Olá mundo.\n'; run.return_value.returncode=0
+        with patch('server.escriba_server.subprocess.Popen') as run:
+            run.return_value.communicate.return_value=('Olá mundo.\n',''); run.return_value.returncode=0
             self.assertEqual(transcribe(wav(),'parakeet-v3-int8','cpu','/a path/fscript'),'Olá mundo.')
             argv=run.call_args.args[0]
             self.assertEqual(argv[0],'/a path/fscript')
@@ -44,8 +44,9 @@ class Contracts(unittest.TestCase):
                 self.assertEqual(source.readframes(160), b'\x01\x00' * 160, 'Preserve original audio samples')
                 self.assertEqual(source.readframes(source.getnframes() - 160), b'\x00\x00' * (source.getnframes() - 160), 'Only append silence')
             import subprocess
-            return subprocess.CompletedProcess(argv, 0, stdout='')
-        with patch('server.escriba_server.subprocess.run', side_effect=inference):
+            from types import SimpleNamespace
+            return SimpleNamespace(returncode=0, communicate=lambda **kw: ('', ''))
+        with patch('server.escriba_server.subprocess.Popen', side_effect=inference):
             audio = bytearray(wav()); audio[44:] = b'\x01\x00' * 160
             self.assertEqual(transcribe(bytes(audio), 'parakeet-redux', 'cpu', 'fscript'), '')
 
@@ -53,7 +54,7 @@ class Contracts(unittest.TestCase):
         with self.assertRaises(ValueError): transcribe(wav(),'../../bad','cpu','fscript')
     def test_backend_failure_not_a_transcript(self):
         import subprocess
-        with patch('server.escriba_server.subprocess.run',side_effect=subprocess.CalledProcessError(1,['fscript'])):
+        with patch('server.escriba_server.subprocess.Popen',side_effect=subprocess.CalledProcessError(1,['fscript'])):
             with self.assertRaises(RuntimeError): transcribe(wav(),'parakeet-ultra','mps','fscript')
 
 if __name__=='__main__': unittest.main()
