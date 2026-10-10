@@ -16,7 +16,7 @@ if ! command -v uv >/dev/null 2>&1 || ! command -v cargo >/dev/null 2>&1; then
 fi
 mkdir -p "$tools_dir"
 if [ ! -x "$tools_dir/bin/fscript" ] || [ "$(cat "$tools_dir/escriba-revision" 2>/dev/null || true)" != "$revision" ]; then
-    cargo install --locked --git https://github.com/brenorb/fast-transcript --rev "$revision" --root "$tools_dir" --force
+    cargo install --locked --git https://github.com/brenorb/fast-transcript --rev "$revision" --root "$tools_dir" --force fast-transcript
     echo "$revision" > "$tools_dir/escriba-revision"
 fi
 exec python3 "$project_dir/server/escriba_server.py" --binary "$tools_dir/bin/fscript" "$@"
