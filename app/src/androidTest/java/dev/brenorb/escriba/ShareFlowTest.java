@@ -138,7 +138,7 @@ public class ShareFlowTest extends ActivityInstrumentationTestCase2<MainActivity
     }
     private android.view.accessibility.AccessibilityNodeInfo node(android.view.accessibility.AccessibilityNodeInfo root,String text){
         if(root==null)return null;
-        if(text.contentEquals(root.getText()==null?"":root.getText()))return root;
+        if(text.equalsIgnoreCase(root.getText()==null?"":root.getText().toString()))return root;
         for(int i=0;i<root.getChildCount();i++){android.view.accessibility.AccessibilityNodeInfo n=node(root.getChild(i),text);if(n!=null)return n;}
         return null;
     }
@@ -172,7 +172,7 @@ public class ShareFlowTest extends ActivityInstrumentationTestCase2<MainActivity
         java.util.List<android.view.accessibility.AccessibilityNodeInfo> spinners=new java.util.ArrayList<>();
         nodesOfClass(getInstrumentation().getUiAutomation().getRootInActiveWindow(),"android.widget.Spinner",spinners);
         assertEquals(1,spinners.size());clickNode(spinners.get(0));
-        clickNode(waitNode("Servidor configurado"));getInstrumentation().waitForIdleSync();
+        clickNode(waitNode("Servidor configurado"));getInstrumentation().waitForIdleSync();waitNode("URL completa de transcrição");
         java.util.List<android.view.accessibility.AccessibilityNodeInfo> fields=new java.util.ArrayList<>();
         nodesOfClass(getInstrumentation().getUiAutomation().getRootInActiveWindow(),"android.widget.EditText",fields);
         assertEquals("Language, URL, secret, model",4,fields.size());
