@@ -14,6 +14,16 @@ public final class CoreSpec {
     check(!EndpointPolicy.valid("http://evil.example/transcribe"), "reject public cleartext");
     check(!EndpointPolicy.valid("https://user:password@example.org/"), "reject URL credentials");
     check(!EndpointPolicy.valid("http://192.168.1.20.evil.example/"), "reject spoofed LAN");
+    check(VoiceModelPolicy.installed(List.of("en-US", "pt-BR"), "pt-br"), "voice locale case");
+    check(
+        VoiceModelPolicy.downloadable(List.of("en-US"), List.of("pt-BR"), "pt-br"),
+        "pending voice download");
+    check(
+        !VoiceModelPolicy.downloadable(List.of("en-US"), List.of(), "pt-BR"),
+        "do not promise unavailable voice download");
+    check(ModelCatalog.defaultId().equals("parakeet-redux"), "smallest model is the default");
+    check(ModelCatalog.ids().length == 4, "only benchmarked models are selectable");
+    check(ModelCatalog.indexOf("phonon-2") >= 0, "Phonon is a preset");
     Transcript state = new Transcript();
     state.partial("Primeira hipótese");
     state.partial("Hipótese corrigida");
@@ -34,7 +44,7 @@ public final class CoreSpec {
     int bytes = 0;
     for (int i = 0; i < 100; i++) bytes += uneven.convert(new byte[882]).length;
     check(bytes == 32000, "resampler phase across buffers");
-    System.out.println("PASS 14 core assertions");
+    System.out.println("PASS 20 core assertions");
   }
 
   static void check(boolean b, String why) {
