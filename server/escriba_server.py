@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+"""Dependency-free, explicit self-hosted adapter to fast-transcript.
+
+Never expose without TLS reverse proxy and ESCRIBA_TOKEN. No transcript logging.
+"""
+import argparse
+import hmac
+import io
+import json
+import os
+import subprocess
+import tempfile
+import threading
+import wave
+from email.parser import BytesParser
+from email.policy import default
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+MODELS={'parakeet-v3-int8','parakeet-redux','parakeet-ultra','phonon-2'}
+MAX_BODY=2*1024*1024
+LOCK=threading.Lock()
+
+
+def decode_request(content_type, body):
+    if len(body)>MAX_BODY: raise ValueError('Audio exceeds size limit')
+    if content_type.startswith('multipart/form-data'):
+        message=BytesParser(policy=default).parsebytes(('Content-Type: '+content_type+'\r\nMIME-Version: 1.0\r\n\r\n').encode()+body)
+        files=[p.get_payload(decode=True) for p in message.iter_parts() if p.get_param('name',header='content-disposition')=='file'] if message.is_multipart() else []
+        if len(files)!=1: raise ValueError('Exactly one audio file required')
+        body=files[0]
+    elif content_type != 'audio/wav': raise ValueError('WAV or multipart required')
+    try:
+        with wave.open(io.BytesIO(body),'rb') as w:
+            if w.getnchannels()!=1 or w.getsampwidth()!=2 or w.getframerate()!=16000 or w.getnframes()>16000*31 or w.getnframes()==0:
+                raise ValueError('Expected nonempty 16-kHz mono PCM16, at most 31 seconds')
+            if len(w.readframes(w.getnframes())) != w.getnframes()*2:
+                raise ValueError('Truncated WAV')
+    except (wave.Error, EOFError) as e: raise ValueError('Invalid WAV') from e
+    return body
+
+
+def transcribe(audio,model,device,binary):
+    if model not in MODELS or device not in {'auto','cpu','mps','mlx','cuda'}: raise ValueError('Unsupported model/device')
+    with tempfile.TemporaryDirectory(prefix='escriba-') as directory:
+        path=os.path.join(directory,'part.wav')
+        with open(path,'wb') as f: f.write(audio)
+        try:
+            result=subprocess.run([binary,path,'--text=plain','--stdout','--no-diarization','--raw','--chunk','0','--model',model,'--device',device],check=True,capture_output=True,text=True,timeout=120)
+        except (OSError,subprocess.SubprocessError) as e: raise RuntimeError('ASR backend failed; check server installation/model') from e
+        return result.stdout.strip()
+
+
+def handler_factory(model,device,binary,token):
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self,*args): pass
+        def reply(self,code,value):
+            data=json.dumps(value,ensure_ascii=False).encode()
+            self.send_response(code); self.send_header('Content-Type','application/json; charset=utf-8'); self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)
+        def do_POST(self):
+            self.connection.settimeout(30)
+            if self.path!='/transcribe': return self.reply(404,{'error':'Not found'})
+            if token and not hmac.compare_digest(self.headers.get('Authorization',''),'Bearer '+token): return self.reply(401,{'error':'Unauthorized'})
+            try:
+                size=int(self.headers.get('Content-Length','0'))
+                if size<=0 or size>MAX_BODY: return self.reply(413,{'error':'Invalid size'})
+                body=self.rfile.read(size)
+                if len(body)!=size: raise ValueError('Truncated request')
+                audio=decode_request(self.headers.get('Content-Type',''),body)
+                if not LOCK.acquire(blocking=False): return self.reply(503,{'error':'Backend busy; try again'})
+                try: text=transcribe(audio,model,device,binary)
+                finally: LOCK.release()
+                self.reply(200,{'text':text})
+            except ValueError as e: self.reply(400,{'error':str(e)})
+            except RuntimeError as e: self.reply(502,{'error':str(e)})
+            except (TimeoutError,ConnectionError): pass
+    return Handler
+
+
+def main():
+    p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--bind',default='127.0.0.1'); p.add_argument('--port',type=int,default=8765)
+    p.add_argument('--model',choices=sorted(MODELS),default='parakeet-v3-int8'); p.add_argument('--device',default='auto',choices=['auto','cpu','mps','mlx','cuda'])
+    p.add_argument('--binary',default='fscript')
+    a=p.parse_args(); token=os.environ.get('ESCRIBA_TOKEN','')
+    if a.bind not in {'127.0.0.1','localhost','::1'} and not token: p.error('Set ESCRIBA_TOKEN when listening beyond loopback')
+    print(f'Escriba listening on {a.bind}:{a.port}; model={a.model}',flush=True)
+    ThreadingHTTPServer((a.bind,a.port),handler_factory(a.model,a.device,a.binary,token)).serve_forever()
+
+if __name__=='__main__': main()
