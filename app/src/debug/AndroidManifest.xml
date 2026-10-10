@@ -1,0 +1,3 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application><provider android:name=".FixtureProvider" android:authorities="dev.brenorb.escriba.fixture" android:exported="false" android:grantUriPermissions="true" /></application>
+</manifest>
