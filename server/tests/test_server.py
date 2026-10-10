@@ -5,7 +5,7 @@ import unittest
 import wave
 from pathlib import Path
 from unittest.mock import patch
-from server.escriba_server import decode_request, transcribe
+from server.escriba_server import decode_request, request_options, transcribe
 
 
 def wav():
@@ -31,6 +31,10 @@ class Contracts(unittest.TestCase):
             self.assertEqual(argv[0],'/a path/fscript')
             self.assertIn('--no-diarization',argv)
             self.assertFalse(Path(argv[1]).exists())
+    def test_request_model_selection(self):
+        body=b'--x\r\nContent-Disposition: form-data; name="model"\r\n\r\nparakeet-redux\r\n--x--\r\n'
+        self.assertEqual(request_options('multipart/form-data; boundary=x',body,'parakeet-v3-int8'),'parakeet-redux')
+        with self.assertRaises(ValueError): request_options('multipart/form-data; boundary=x',body.replace(b'parakeet-redux',b'../../bad'),'parakeet-v3-int8')
     def test_invalid_model_rejected(self):
         with self.assertRaises(ValueError): transcribe(wav(),'../../bad','cpu','fscript')
     def test_backend_failure_not_a_transcript(self):
