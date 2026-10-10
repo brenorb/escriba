@@ -53,6 +53,17 @@ def request_options(content_type, body, default_model):
 
 def transcribe(audio,model,device,binary):
     if model not in MODELS or device not in {'auto','cpu','mps','mlx','cuda'}: raise ValueError('Unsupported model/device')
+    # Codec delay can leave a few milliseconds after a full mobile window.
+    # Some neural frontends require a minimum input length: retain every source
+    # sample and append silence, rather than dropping the last part of speech.
+    with wave.open(io.BytesIO(audio),'rb') as source:
+        if source.getnframes() < 16000:
+            frames=source.readframes(source.getnframes())
+            output=io.BytesIO()
+            with wave.open(output,'wb') as padded:
+                padded.setparams(source.getparams())
+                padded.writeframes(frames+b'\0'*(16000-source.getnframes())*source.getnchannels()*source.getsampwidth())
+            audio=output.getvalue()
     with tempfile.TemporaryDirectory(prefix='escriba-') as directory:
         path=os.path.join(directory,'part.wav')
         with open(path,'wb') as f: f.write(audio)

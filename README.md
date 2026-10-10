@@ -14,7 +14,7 @@ Baixe o APK em [Releases](https://github.com/brenorb/escriba/releases), instale 
 
 ## Modelos do fast-transcript
 
-O adaptador Python usa somente a biblioteca padrão e executa o [fast-transcript](https://github.com/brenorb/fast-transcript) instalado no computador. Nenhum peso vai para o celular. `parakeet-v3-int8`, `parakeet-redux`, `parakeet-ultra` e `phonon-2` são permitidos; a seleção enviada pelo app prevalece sobre o modelo padrão do servidor. `--device` é configuração do servidor. O fscript identifica o idioma automaticamente; o campo idioma do app é usado pelo Android e por outros endpoints que o aceitam.
+O adaptador Python usa somente a biblioteca padrão e executa o [fast-transcript](https://github.com/brenorb/fast-transcript) instalado no computador. Nenhum peso vai para o celular. `parakeet-v3-int8`, `parakeet-redux`, `parakeet-ultra` e `phonon-2` são permitidos; a seleção enviada pelo app prevalece sobre o modelo padrão do servidor. `--device` é configuração do servidor. Sobras de decodificação menores que um segundo são completadas com silêncio apenas no servidor, preservando as amostras e os intervalos originais. O fscript identifica o idioma automaticamente; o campo idioma do app é usado pelo Android e por outros endpoints que o aceitam.
 
 ```sh
 # fscript deve estar instalado e seus modelos disponíveis no computador.
