@@ -210,6 +210,10 @@ public class ShareFlowTest extends ActivityInstrumentationTestCase2<MainActivity
     private void selectModel(MainActivity activity,String id)throws Exception{
         getInstrumentation().runOnMainSync(()->button(activity.getWindow().getDecorView(),"⋮").performClick());
         clickNode(waitNode("Usar "+ModelCatalog.labelAt(ModelCatalog.indexOf(id))));
+        getInstrumentation().waitForIdleSync();
+        long limit=System.currentTimeMillis()+1500;
+        while(!id.equals(activity.getSharedPreferences("settings",0).getString("model",""))&&System.currentTimeMillis()<limit)Thread.sleep(20);
+        assertEquals("Chosen menu model must persist",id,activity.getSharedPreferences("settings",0).getString("model",""));
     }
     public void testModelSelectionRetranscribesCurrentAudioAutomatically()throws Exception{
         MainActivity a=share("short.mp3");waitDone(a);
@@ -264,6 +268,37 @@ public class ShareFlowTest extends ActivityInstrumentationTestCase2<MainActivity
         });
         assertTrue("Download must have an enabled cancel action",cancellable[0]);
         assertTrue(text(a,MainActivity.STATUS_ID).startsWith("Interrompido"));assertEquals(0,requests);
+    }
+    private void shell(String command)throws Exception{
+        try(java.io.InputStream input=new android.os.ParcelFileDescriptor.AutoCloseInputStream(getInstrumentation().getUiAutomation().executeShellCommand(command))){input.readAllBytes();}
+    }
+    public void testLandscapeLeavesRoomForReading()throws Exception{
+        MainActivity a=share("short.mp3");waitDone(a);
+        try{
+            shell("settings put system font_scale 1.5");
+            getInstrumentation().runOnMainSync(()->a.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE));
+            long limit=System.currentTimeMillis()+3000;while(a.getResources().getConfiguration().orientation!=android.content.res.Configuration.ORIENTATION_LANDSCAPE&&System.currentTimeMillis()<limit)Thread.sleep(50);
+            assertEquals("Actual landscape configuration required",android.content.res.Configuration.ORIENTATION_LANDSCAPE,a.getResources().getConfiguration().orientation);Thread.sleep(500);
+            android.view.accessibility.AccessibilityNodeInfo root=getInstrumentation().getUiAutomation().getRootInActiveWindow();
+            java.util.List<android.view.accessibility.AccessibilityNodeInfo> panes=new java.util.ArrayList<>();nodesOfClass(root,"android.widget.ScrollView",panes);
+            assertEquals(1,panes.size());android.graphics.Rect viewport=new android.graphics.Rect(),reading=new android.graphics.Rect();root.getBoundsInScreen(viewport);panes.get(0).getBoundsInScreen(reading);
+            assertTrue("Reading pane must occupy half landscape viewport; reading="+reading.height()+" viewport="+viewport.height(),reading.height()>=viewport.height()/2);
+        }finally{getInstrumentation().runOnMainSync(()->a.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT));shell("wm user-rotation lock 0");shell("settings put system font_scale 1.0");}
+    }
+    public void testVoiceDownloadWatchdogReleasesPendingState()throws Exception{
+        int[] finished={0};boolean[] waiting={true};
+        getInstrumentation().runOnMainSync(()->{
+            try{
+                NativeEngine engine=new NativeEngine(getInstrumentation().getTargetContext(),new NativeEngine.Listener(){
+                    public void partial(String text){}public void segment(String text){}public void done(){}public void error(String text){}
+                    public void downloadStatus(String text,boolean complete){if(complete)finished[0]++;}
+                });
+                java.lang.reflect.Field requested=NativeEngine.class.getDeclaredField("downloadRequested");requested.setAccessible(true);requested.setBoolean(engine,true);
+                java.lang.reflect.Field timer=NativeEngine.class.getDeclaredField("downloadTimeout");timer.setAccessible(true);((Runnable)timer.get(engine)).run();
+                waiting[0]=requested.getBoolean(engine);((Runnable)timer.get(engine)).run();
+            }catch(Exception failure){throw new RuntimeException(failure);}
+        });
+        assertFalse("A silent provider must not keep installation pending forever",waiting[0]);assertEquals("Finish once, even if timer repeats",1,finished[0]);
     }
     public void testNativeEarlyCompletionIsRejected()throws Exception{
         int[] calls=new int[3];
