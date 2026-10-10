@@ -34,7 +34,7 @@ if not re.fullmatch(r'[a-z0-9_-]+\.[a-z0-9]+',name): raise SystemExit('Invalid f
 adb('shell','am','force-stop','dev.brenorb.escriba')
 adb('shell','run-as','dev.brenorb.escriba','mkdir','-p','cache','shared_prefs')
 adb('shell','run-as','dev.brenorb.escriba','sh','-c',f"'cat > cache/{name}'",data=a.audio.read_bytes())
-prefs='<?xml version="1.0" encoding="utf-8"?><map>'+''.join('<string name="'+k+'">'+escape(v)+'</string>' for k,v in {'engine':'remote','endpoint':a.endpoint,'model':a.model,'language':'pt-BR','token':''}.items())+'</map>'
+prefs='<?xml version="1.0" encoding="utf-8"?><map>'+''.join('<string name="'+k+'">'+escape(v)+'</string>' for k,v in {'engine':'remote','endpoint':a.endpoint,'model':a.model,'language':'pt-BR','token':''}.items())+'<boolean name="compactModelMigrationDone" value="true" /></map>'
 adb('shell','run-as','dev.brenorb.escriba','sh','-c',"'cat > shared_prefs/settings.xml'",data=prefs.encode())
 started=time.monotonic()
 launch=adb('shell','am','start','-W','-n','dev.brenorb.escriba/.MainActivity','-a','android.intent.action.SEND','-t','application/octet-stream','--eu','android.intent.extra.STREAM','content://dev.brenorb.escriba.fixture/'+name).decode()
@@ -57,7 +57,10 @@ while time.monotonic()-started<a.timeout:
     if transcript and first is None:first=time.monotonic()-started
     if status.startswith(('Concluído','Não foi possível')):break
     time.sleep(.2)
-result={'android_api':int(sdk),'model':a.model,'status':status,'transcript':transcript,'first_visible_seconds_upper_bound':first,'complete_seconds_upper_bound':time.monotonic()-started,'launch':launch,'observations':observations}
+saved_prefs = ET.fromstring(adb('shell','run-as','dev.brenorb.escriba','cat','shared_prefs/settings.xml'))
+actual_model = next((n.text for n in saved_prefs if n.get('name') == 'model'), None)
+if actual_model != a.model: raise SystemExit('Selected model changed unexpectedly: '+str(actual_model))
+result={'android_api':int(sdk),'model':actual_model,'status':status,'transcript':transcript,'first_visible_seconds_upper_bound':first,'complete_seconds_upper_bound':time.monotonic()-started,'launch':launch,'observations':observations}
 (a.output/'result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2))
 (a.output/'screen.png').write_bytes(adb('exec-out','screencap','-p'))
 print(json.dumps(result,ensure_ascii=False,indent=2))
