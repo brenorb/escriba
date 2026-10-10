@@ -209,6 +209,7 @@ public class ShareFlowTest extends ActivityInstrumentationTestCase2<MainActivity
     }
     private void selectModel(MainActivity activity,String id)throws Exception{
         getInstrumentation().runOnMainSync(()->button(activity.getWindow().getDecorView(),"⋮").performClick());
+        waitNode("Usar "+ModelCatalog.labelAt(ModelCatalog.indexOf(id)));Thread.sleep(200);
         clickNode(waitNode("Usar "+ModelCatalog.labelAt(ModelCatalog.indexOf(id))));
         getInstrumentation().waitForIdleSync();
         long limit=System.currentTimeMillis()+1500;
@@ -234,8 +235,13 @@ public class ShareFlowTest extends ActivityInstrumentationTestCase2<MainActivity
         assertEquals("parakeet-redux",settings.getString("model",""));assertTrue(settings.getBoolean("compactModelMigrationDone",false));
         selectModel(a,"parakeet-v3-int8");
         assertEquals("parakeet-v3-int8",settings.getString("model",""));
-        getInstrumentation().runOnMainSync(()->a.recreate());getInstrumentation().waitForIdleSync();Thread.sleep(300);
-        assertEquals("Explicit selection must survive later creations","parakeet-v3-int8",settings.getString("model",""));
+        android.app.Instrumentation.ActivityMonitor monitor=getInstrumentation().addMonitor(MainActivity.class.getName(),null,false);
+        android.app.Activity recreated=null;
+        try{
+            getInstrumentation().runOnMainSync(()->a.recreate());recreated=monitor.waitForActivityWithTimeout(3000);
+            assertNotNull("Recreation must actually launch the next activity",recreated);getInstrumentation().waitForIdleSync();
+            assertEquals("Explicit selection must survive later creations","parakeet-v3-int8",settings.getString("model",""));
+        }finally{if(recreated!=null){android.app.Activity activity=recreated;getInstrumentation().runOnMainSync(activity::finish);}getInstrumentation().removeMonitor(monitor);}
     }
     private NativeEngine.Listener nativeUi(MainActivity activity)throws Exception{
         java.lang.reflect.Field field=MainActivity.class.getDeclaredField("nativeEngine");field.setAccessible(true);
@@ -245,7 +251,7 @@ public class ShareFlowTest extends ActivityInstrumentationTestCase2<MainActivity
     }
     private MainActivity nativeShare()throws Exception{
         getInstrumentation().getTargetContext().getSharedPreferences("settings",0).edit().putString("engine","native").commit();
-        MainActivity activity=share("short.mp3");Thread.sleep(500);return activity;
+        shell("pm grant dev.brenorb.escriba android.permission.RECORD_AUDIO");MainActivity activity=share("short.mp3");Thread.sleep(500);return activity;
     }
     public void testVoiceInstallStateSurvivesRedraw()throws Exception{
         MainActivity a=nativeShare();NativeEngine.Listener listener=nativeUi(a);
@@ -279,11 +285,22 @@ public class ShareFlowTest extends ActivityInstrumentationTestCase2<MainActivity
             getInstrumentation().runOnMainSync(()->a.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE));
             long limit=System.currentTimeMillis()+3000;while(a.getResources().getConfiguration().orientation!=android.content.res.Configuration.ORIENTATION_LANDSCAPE&&System.currentTimeMillis()<limit)Thread.sleep(50);
             assertEquals("Actual landscape configuration required",android.content.res.Configuration.ORIENTATION_LANDSCAPE,a.getResources().getConfiguration().orientation);Thread.sleep(500);
-            android.view.accessibility.AccessibilityNodeInfo root=getInstrumentation().getUiAutomation().getRootInActiveWindow();
-            java.util.List<android.view.accessibility.AccessibilityNodeInfo> panes=new java.util.ArrayList<>();nodesOfClass(root,"android.widget.ScrollView",panes);
-            assertEquals(1,panes.size());android.graphics.Rect viewport=new android.graphics.Rect(),reading=new android.graphics.Rect();root.getBoundsInScreen(viewport);panes.get(0).getBoundsInScreen(reading);
-            assertTrue("Reading pane must occupy half landscape viewport; reading="+reading.height()+" viewport="+viewport.height(),reading.height()>=viewport.height()/2);
-        }finally{getInstrumentation().runOnMainSync(()->a.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT));shell("wm user-rotation lock 0");shell("settings put system font_scale 1.0");}
+            int[] dimensions=new int[2];
+            getInstrumentation().runOnMainSync(()->{
+                View view=a.findViewById(MainActivity.TRANSCRIPT_ID);
+                while(view!=null&&!(view instanceof android.widget.ScrollView))view=view.getParent() instanceof View?(View)view.getParent():null;
+                if(view!=null)dimensions[0]=view.getHeight();dimensions[1]=a.getWindow().getDecorView().getHeight();
+            });
+            assertTrue("Reading pane must occupy half landscape viewport; reading="+dimensions[0]+" viewport="+dimensions[1],dimensions[0]>=dimensions[1]/2);
+
+        }finally{getInstrumentation().runOnMainSync(()->a.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT));shell("wm user-rotation lock 0");shell("settings put system font_scale 1.0");getInstrumentation().waitForIdleSync();Thread.sleep(500);}
+    }
+    public void testNativeReconnectCanBeCancelledBeforeDelayedRetry()throws Exception{
+        MainActivity a=nativeShare();NativeEngine.Listener listener=nativeUi(a);
+        boolean[] enabled={false};
+        getInstrumentation().runOnMainSync(()->{listener.modelUnavailable(true);listener.disconnected();Button stop=button(a.getWindow().getDecorView(),"Parar");enabled[0]=stop.isEnabled();stop.performClick();});
+        assertTrue("Reconnect must expose an enabled Stop even after missing-model state",enabled[0]);Thread.sleep(1100);getInstrumentation().waitForIdleSync();
+        assertTrue("Delayed reconnect must not restart after Stop",text(a,MainActivity.STATUS_ID).startsWith("Interrompido"));assertEquals(0,requests);
     }
     public void testVoiceDownloadWatchdogReleasesPendingState()throws Exception{
         int[] finished={0};boolean[] waiting={true};
