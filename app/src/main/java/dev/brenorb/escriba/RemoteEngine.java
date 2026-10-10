@@ -106,6 +106,30 @@ public final class RemoteEngine {
             .getBytes(StandardCharsets.UTF_8));
     body.write(Pcm.wav(pcm, 16000, 1));
     body.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+    long deadline = System.nanoTime() + 30_000_000_000L;
+    int delay = 500;
+    while (!cancelled) {
+      try {
+        String text = request(endpoint, token, boundary, body);
+        if (!cancelled) listener.segment(text, offset / 32000.0, (offset + pcm.length) / 32000.0);
+        return;
+      } catch (BackendBusy busy) {
+        if (System.nanoTime() >= deadline) {
+          throw new IOException(
+              "O servidor continua ocupado. Tente novamente em alguns instantes.");
+        }
+        Thread.sleep(delay);
+        delay = Math.min(3000, delay * 2);
+      }
+    }
+    throw new InterruptedException();
+  }
+
+  private static final class BackendBusy extends IOException {}
+
+  private String request(String endpoint, String token, String boundary, ByteArrayOutputStream body)
+      throws Exception {
+    if (cancelled) throw new InterruptedException();
     HttpURLConnection c = (HttpURLConnection) new URL(endpoint).openConnection();
     connection = c;
     try {
@@ -121,6 +145,7 @@ public final class RemoteEngine {
         body.writeTo(out);
       }
       int status = c.getResponseCode();
+      if (status == 503) throw new BackendBusy();
       if (status != 200)
         throw new IOException(
             "Servidor respondeu HTTP " + status + ". Verifique endereço, chave e modelo.");
@@ -136,8 +161,7 @@ public final class RemoteEngine {
       JSONObject json = new JSONObject(response.toString(StandardCharsets.UTF_8.name()));
       if (!json.has("text") || !(json.get("text") instanceof String))
         throw new IOException("Resposta sem campo text.");
-      if (!cancelled)
-        listener.segment(json.getString("text"), offset / 32000.0, (offset + pcm.length) / 32000.0);
+      return json.getString("text");
     } finally {
       c.disconnect();
       if (connection == c) connection = null;
