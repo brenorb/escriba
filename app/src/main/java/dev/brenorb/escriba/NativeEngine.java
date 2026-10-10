@@ -26,6 +26,7 @@ public final class NativeEngine implements RecognitionListener {
   private ParcelFileDescriptor[] pipe;
   private volatile OutputStream output;
   private volatile boolean cancelled;
+  private volatile boolean sourceComplete;
   private int segments;
   private final Runnable timeout =
       () -> fail("O serviço Android não respondeu. Tente outro idioma ou configure o servidor.");
@@ -65,7 +66,8 @@ public final class NativeEngine implements RecognitionListener {
           new RecognitionSupportCallback() {
             public void onSupportResult(RecognitionSupport support) {
               if (cancelled) return;
-              if (!support.getInstalledOnDeviceLanguages().contains(language)) {
+              if (support.getInstalledOnDeviceLanguages().stream()
+                  .noneMatch(language::equalsIgnoreCase)) {
                 fail(
                     "Idioma local não instalado. Baixe o pacote de voz do Android ou use o"
                         + " servidor.");
@@ -105,6 +107,7 @@ public final class NativeEngine implements RecognitionListener {
                       if (!cancelled) out.write(pcm);
                     },
                     () -> cancelled);
+                sourceComplete = !cancelled;
               } catch (Exception e) {
                 main.post(
                     () -> {
@@ -176,10 +179,18 @@ public final class NativeEngine implements RecognitionListener {
   }
 
   public void onEndOfSegmentedSession() {
+    if (!sourceComplete) {
+      fail("O serviço Android encerrou antes de consumir o arquivo inteiro. Use o servidor.");
+      return;
+    }
     finish();
   }
 
   public void onResults(Bundle b) {
+    if (!cancelled && !sourceComplete) {
+      fail("O serviço Android encerrou antes de consumir o arquivo inteiro. Use o servidor.");
+      return;
+    }
     if (!cancelled) {
       if (segments == 0) listener.segment(text(b));
       finish();
