@@ -71,6 +71,7 @@ public class MainActivity extends Activity {
     boolean dark =
         (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
             == Configuration.UI_MODE_NIGHT_YES;
+    setTheme(dark ? android.R.style.Theme_Material_NoActionBar : R.style.AppTheme);
     background = Color.parseColor(dark ? "#141C19" : "#F7FAF7");
     foreground = Color.parseColor(dark ? "#EDF3ED" : "#1C2923");
     muted = Color.parseColor(dark ? "#BAC8BE" : "#53685D");
