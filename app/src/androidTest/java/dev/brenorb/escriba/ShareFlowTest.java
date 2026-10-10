@@ -12,7 +12,7 @@ import java.net.*;
 import java.nio.charset.StandardCharsets;
 public class ShareFlowTest extends ActivityInstrumentationTestCase2<MainActivity> {
     public ShareFlowTest(){super(MainActivity.class);}
-    private ServerSocket server; private Thread handler; private volatile int requests; private volatile int delayMillis, responseCode=200, textRepeats=1, busyResponses;
+    private ServerSocket server; private Thread handler; private volatile int requests; private volatile int delayMillis, responseCode=200, textRepeats=1, busyResponses; private final java.util.List<String> receivedModels=java.util.Collections.synchronizedList(new java.util.ArrayList<>());
     @Override protected void setUp() throws Exception {
         super.setUp();
         server=new ServerSocket(0,8,InetAddress.getByName("127.0.0.1"));
@@ -23,6 +23,9 @@ public class ShareFlowTest extends ActivityInstrumentationTestCase2<MainActivity
             int length=0;for(String line:header.toString().split("\r\n"))if(line.toLowerCase().startsWith("content-length:"))length=Integer.parseInt(line.substring(15).trim());
             byte[] body=in.readNBytes(length);
             if(body.length!=length)throw new IOException("Truncated body");
+            String multipart=new String(body,StandardCharsets.UTF_8);
+            int modelStart=multipart.indexOf("name=\"model\"");
+            if(modelStart>=0){modelStart=multipart.indexOf("\r\n\r\n",modelStart)+4;receivedModels.add(multipart.substring(modelStart,multipart.indexOf("\r\n",modelStart)));}
             requests++;
             if(delayMillis>0)try{Thread.sleep(delayMillis);}catch(InterruptedException ignored){}
             String json="{\"text\":\""+("Trecho "+requests+" transcrito. ").repeat(textRepeats)+"\"}";
@@ -171,11 +174,11 @@ public class ShareFlowTest extends ActivityInstrumentationTestCase2<MainActivity
         assertNotNull(waitNode("URL completa de transcrição"));assertNotNull(waitNode("Salvar"));
         java.util.List<android.view.accessibility.AccessibilityNodeInfo> spinners=new java.util.ArrayList<>();
         nodesOfClass(getInstrumentation().getUiAutomation().getRootInActiveWindow(),"android.widget.Spinner",spinners);
-        assertEquals(1,spinners.size());clickNode(spinners.get(0));
+        assertEquals(2,spinners.size());clickNode(spinners.get(0));
         clickNode(waitNode("Servidor configurado"));getInstrumentation().waitForIdleSync();waitNode("URL completa de transcrição");
         java.util.List<android.view.accessibility.AccessibilityNodeInfo> fields=new java.util.ArrayList<>();
         nodesOfClass(getInstrumentation().getUiAutomation().getRootInActiveWindow(),"android.widget.EditText",fields);
-        assertEquals("Language, URL, secret, model",4,fields.size());
+        assertEquals("Language, URL, secret",3,fields.size());
         android.os.Bundle arguments=new android.os.Bundle();arguments.putCharSequence(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,"https://example.org/transcribe");
         assertTrue(fields.get(1).performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_TEXT,arguments));
         clickNode(waitNode("Salvar"));getInstrumentation().waitForIdleSync();
@@ -199,6 +202,68 @@ public class ShareFlowTest extends ActivityInstrumentationTestCase2<MainActivity
             double ratio=(Math.max(light,background)+0.05)/(Math.min(light,background)+0.05);
             assertTrue("Native spinner text contrast must be >=4.5, actual="+ratio,ratio>=4.5);
         }finally{mode.setApplicationNightMode(android.app.UiModeManager.MODE_NIGHT_NO);}
+    }
+    private void waitRequests(int expected)throws Exception{
+        long limit=System.currentTimeMillis()+5000;while(requests<expected&&System.currentTimeMillis()<limit)Thread.sleep(50);
+        assertEquals("Expected automatic inference request",expected,requests);
+    }
+    private void selectModel(MainActivity activity,String id)throws Exception{
+        getInstrumentation().runOnMainSync(()->button(activity.getWindow().getDecorView(),"⋮").performClick());
+        clickNode(waitNode("Usar "+ModelCatalog.labelAt(ModelCatalog.indexOf(id))));
+    }
+    public void testModelSelectionRetranscribesCurrentAudioAutomatically()throws Exception{
+        MainActivity a=share("short.mp3");waitDone(a);
+        assertEquals("parakeet-redux",receivedModels.get(0));
+        selectModel(a,"parakeet-v3-int8");waitRequests(2);waitDone(a);
+        assertEquals("parakeet-v3-int8",receivedModels.get(1));
+    }
+    public void testModelSelectionCancelsInFlightInference()throws Exception{
+        delayMillis=2500;MainActivity a=share("short.mp3");waitRequest();
+        selectModel(a,"parakeet-v3-int8");waitDone(a);
+        assertEquals(2,requests);assertEquals("parakeet-v3-int8",receivedModels.get(1));
+        assertFalse(text(a,MainActivity.TRANSCRIPT_ID).contains("Trecho 1"));assertTrue(text(a,MainActivity.TRANSCRIPT_ID).contains("Trecho 2"));
+    }
+    public void testReduxMigrationOccursOnlyOnce()throws Exception{
+        android.content.SharedPreferences settings=getInstrumentation().getTargetContext().getSharedPreferences("settings",0);
+        settings.edit().putString("model","parakeet-v3-int8").remove("compactModelMigrationDone").commit();
+        setActivityIntent(new Intent(Intent.ACTION_MAIN));MainActivity a=getActivity();
+        assertEquals("parakeet-redux",settings.getString("model",""));assertTrue(settings.getBoolean("compactModelMigrationDone",false));
+        selectModel(a,"parakeet-v3-int8");
+        assertEquals("parakeet-v3-int8",settings.getString("model",""));
+        getInstrumentation().runOnMainSync(()->a.recreate());getInstrumentation().waitForIdleSync();Thread.sleep(300);
+        assertEquals("Explicit selection must survive later creations","parakeet-v3-int8",settings.getString("model",""));
+    }
+    private NativeEngine.Listener nativeUi(MainActivity activity)throws Exception{
+        java.lang.reflect.Field field=MainActivity.class.getDeclaredField("nativeEngine");field.setAccessible(true);
+        NativeEngine engine=(NativeEngine)field.get(activity);assertNotNull("Native engine must exist",engine);
+        java.lang.reflect.Field listener=NativeEngine.class.getDeclaredField("listener");listener.setAccessible(true);
+        return (NativeEngine.Listener)listener.get(engine);
+    }
+    private MainActivity nativeShare()throws Exception{
+        getInstrumentation().getTargetContext().getSharedPreferences("settings",0).edit().putString("engine","native").commit();
+        MainActivity activity=share("short.mp3");Thread.sleep(500);return activity;
+    }
+    public void testVoiceInstallStateSurvivesRedraw()throws Exception{
+        MainActivity a=nativeShare();NativeEngine.Listener listener=nativeUi(a);
+        int[] visible={-1};boolean[] enabled={false};
+        getInstrumentation().runOnMainSync(()->{
+            listener.modelUnavailable(true);
+            a.onConfigurationChanged(new android.content.res.Configuration(a.getResources().getConfiguration()));
+            Button install=button(a.getWindow().getDecorView(),"Instalar voz e continuar");
+            if(install!=null){visible[0]=install.getVisibility();enabled[0]=install.isEnabled();}
+        });
+        assertEquals("Keep one-click installation reachable after redraw",View.VISIBLE,visible[0]);assertTrue(enabled[0]);
+    }
+    public void testVoiceDownloadCanBeStopped()throws Exception{
+        MainActivity a=nativeShare();NativeEngine.Listener listener=nativeUi(a);
+        boolean[] cancellable={false};
+        getInstrumentation().runOnMainSync(()->{
+            listener.modelUnavailable(true);listener.downloadStatus("Download em andamento",false);
+            Button stop=button(a.getWindow().getDecorView(),"Parar");cancellable[0]=stop.isEnabled();
+            stop.performClick();listener.modelReady();
+        });
+        assertTrue("Download must have an enabled cancel action",cancellable[0]);
+        assertTrue(text(a,MainActivity.STATUS_ID).startsWith("Interrompido"));assertEquals(0,requests);
     }
     public void testNativeEarlyCompletionIsRejected()throws Exception{
         int[] calls=new int[3];
