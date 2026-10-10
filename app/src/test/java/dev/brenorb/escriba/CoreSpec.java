@@ -7,7 +7,7 @@ public final class CoreSpec {
         check(!InputPolicy.accepts("text/plain", "notes.txt"), "reject text");
         check(!InputPolicy.accepts("application/octet-stream", "payload.exe"), "reject unrelated binary");
         check(EndpointPolicy.valid("https://example.org/v1/audio/transcriptions"), "HTTPS");
-        check(EndpointPolicy.valid("http://192.168.1.20:8765/transcribe"), "LAN");
+        check(!EndpointPolicy.valid("http://192.168.1.20:8765/transcribe"), "LAN requires TLS");
         check(!EndpointPolicy.valid("http://evil.example/transcribe"), "reject public cleartext");
         check(!EndpointPolicy.valid("https://user:password@example.org/"), "reject URL credentials");
         check(!EndpointPolicy.valid("http://192.168.1.20.evil.example/"), "reject spoofed LAN");

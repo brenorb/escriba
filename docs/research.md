@@ -22,4 +22,4 @@ Local sibling fast-transcript canonical ASR v2 (2026-09-30, M5 Max) compares ONN
 
 ## Choice
 
-Java + platform Views, minSdk 33, no app runtime dependencies, no model weights, no WebView or microphone recording code. Native offline recognizer is default. Missing native support gives an actionable message; remote mode is explicit and configured once. Never silently send audio to a server. Remote HTTPS by default; HTTP only on loopback or private LAN for a self-hosted computer. Lifecycle cancellation closes codec/pipe/socket and generation IDs prevent stale results replacing a newer share.
+Java + platform Views, minSdk 33, no app runtime dependencies, no model weights, no WebView or microphone recording code. Native offline recognizer is default. Missing native support gives an actionable message; remote mode is explicit and configured once. Never silently send audio to a server. Distribution requires HTTPS; debug tests allow HTTP on loopback only. Self-hosted computers use a TLS reverse proxy. Lifecycle cancellation closes codec/pipe/socket and generation IDs prevent stale results replacing a newer share.
