@@ -18,7 +18,7 @@ import java.util.Locale;
 public class MainActivity extends Activity {
   public static final int STATUS_ID = 1001, TRANSCRIPT_ID = 1002;
   private TextView status, transcript, partial, title;
-  private Button copy, share, stop, retry;
+  private Button copy, share, stop, retry, overflow;
   private Transcript state = new Transcript();
   private RemoteEngine remote;
   private NativeEngine nativeEngine;
@@ -96,7 +96,7 @@ public class MainActivity extends Activity {
     header.setGravity(Gravity.CENTER_VERTICAL);
     TextView brand = label("escriba", 26, foreground);
     header.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
-    Button overflow = button("⋮", this::menu);
+    overflow = button("⋮", this::menu);
     overflow.setContentDescription("Mais opções");
     header.addView(overflow);
     root.addView(header);
@@ -177,7 +177,7 @@ public class MainActivity extends Activity {
   }
 
   private void menu() {
-    PopupMenu menu = new PopupMenu(this, findViewById(android.R.id.content));
+    PopupMenu menu = new PopupMenu(this, overflow);
     menu.getMenu().add("Ajustes");
     menu.getMenu().add("Escolher outro áudio");
     menu.getMenu().add("Limpar texto");
