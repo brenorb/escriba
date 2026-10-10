@@ -144,19 +144,61 @@ public class ShareFlowTest extends ActivityInstrumentationTestCase2<MainActivity
     }
     private android.view.accessibility.AccessibilityNodeInfo waitNode(String text)throws Exception{
         long limit=System.currentTimeMillis()+3000;
-        while(System.currentTimeMillis()<limit){android.view.accessibility.AccessibilityNodeInfo n=node(getInstrumentation().getUiAutomation().getRootInActiveWindow(),text);if(n!=null)return n;Thread.sleep(50);}
+        while(System.currentTimeMillis()<limit){android.view.accessibility.AccessibilityNodeInfo n=node(getInstrumentation().getUiAutomation().getRootInActiveWindow(),text);if(n!=null){android.graphics.Rect bounds=new android.graphics.Rect();n.getBoundsInScreen(bounds);if(bounds.width()>0&&bounds.height()>0)return n;}Thread.sleep(50);}
         fail("Visible UI text not found: "+text);return null;
     }
+    private void clickNode(android.view.accessibility.AccessibilityNodeInfo target){
+        android.graphics.Rect bounds=new android.graphics.Rect();target.getBoundsInScreen(bounds);
+        assertTrue(bounds.width()>0&&bounds.height()>0);long now=android.os.SystemClock.uptimeMillis();
+        getInstrumentation().sendPointerSync(android.view.MotionEvent.obtain(now,now,android.view.MotionEvent.ACTION_DOWN,bounds.exactCenterX(),bounds.exactCenterY(),0));
+        getInstrumentation().sendPointerSync(android.view.MotionEvent.obtain(now,now+20,android.view.MotionEvent.ACTION_UP,bounds.exactCenterX(),bounds.exactCenterY(),0));
+    }
+    private void nodesOfClass(android.view.accessibility.AccessibilityNodeInfo root,String type,java.util.List<android.view.accessibility.AccessibilityNodeInfo> found){
+        if(root==null)return;
+        if(type.contentEquals(root.getClassName()))found.add(root);
+        for(int i=0;i<root.getChildCount();i++)nodesOfClass(root.getChild(i),type,found);
+    }
     public void testSettingsMenuIsReachable()throws Exception{
+        getInstrumentation().getTargetContext().getSharedPreferences("settings",0).edit().putString("engine","native").putString("endpoint","").commit();
         setActivityIntent(new Intent(Intent.ACTION_MAIN));MainActivity a=getActivity();
         getInstrumentation().runOnMainSync(()->button(a.getWindow().getDecorView(),"⋮").performClick());
         getInstrumentation().waitForIdleSync();
         android.view.accessibility.AccessibilityNodeInfo settings=waitNode("Ajustes");
         android.graphics.Rect bounds=new android.graphics.Rect();settings.getBoundsInScreen(bounds);
         assertTrue("Settings menu item must be visible on screen",bounds.height()>0);
-        assertTrue(settings.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK));
+        clickNode(settings);
         getInstrumentation().waitForIdleSync();
         assertNotNull(waitNode("URL completa de transcrição"));assertNotNull(waitNode("Salvar"));
+        java.util.List<android.view.accessibility.AccessibilityNodeInfo> spinners=new java.util.ArrayList<>();
+        nodesOfClass(getInstrumentation().getUiAutomation().getRootInActiveWindow(),"android.widget.Spinner",spinners);
+        assertEquals(1,spinners.size());clickNode(spinners.get(0));
+        clickNode(waitNode("Servidor configurado"));getInstrumentation().waitForIdleSync();
+        java.util.List<android.view.accessibility.AccessibilityNodeInfo> fields=new java.util.ArrayList<>();
+        nodesOfClass(getInstrumentation().getUiAutomation().getRootInActiveWindow(),"android.widget.EditText",fields);
+        assertEquals("Language, URL, secret, model",4,fields.size());
+        android.os.Bundle arguments=new android.os.Bundle();arguments.putCharSequence(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,"https://example.org/transcribe");
+        assertTrue(fields.get(1).performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_TEXT,arguments));
+        clickNode(waitNode("Salvar"));getInstrumentation().waitForIdleSync();
+        assertEquals("remote",a.getSharedPreferences("settings",0).getString("engine",""));
+        assertEquals("https://example.org/transcribe",a.getSharedPreferences("settings",0).getString("endpoint",""));
+    }
+    private double luminance(int color){
+        double[] channels={android.graphics.Color.red(color)/255.0,android.graphics.Color.green(color)/255.0,android.graphics.Color.blue(color)/255.0};
+        for(int i=0;i<3;i++)channels[i]=channels[i]<=0.03928?channels[i]/12.92:Math.pow((channels[i]+0.055)/1.055,2.4);
+        return channels[0]*0.2126+channels[1]*0.7152+channels[2]*0.0722;
+    }
+    public void testNativeControlsHaveReadableDarkThemeContrast()throws Exception{
+        android.app.UiModeManager mode=(android.app.UiModeManager)getInstrumentation().getTargetContext().getSystemService(android.content.Context.UI_MODE_SERVICE);
+        mode.setApplicationNightMode(android.app.UiModeManager.MODE_NIGHT_YES);
+        try{
+            setActivityIntent(new Intent(Intent.ACTION_MAIN));MainActivity a=getActivity();
+            getInstrumentation().waitForIdleSync();
+            android.util.TypedValue value=new android.util.TypedValue();assertTrue(a.getTheme().resolveAttribute(android.R.attr.textColorPrimary,value,true));
+            int color=value.resourceId!=0?a.getResources().getColorStateList(value.resourceId,a.getTheme()).getDefaultColor():value.data;
+            double light=luminance(color),background=luminance(android.graphics.Color.parseColor("#141C19"));
+            double ratio=(Math.max(light,background)+0.05)/(Math.min(light,background)+0.05);
+            assertTrue("Native spinner text contrast must be >=4.5, actual="+ratio,ratio>=4.5);
+        }finally{mode.setApplicationNightMode(android.app.UiModeManager.MODE_NIGHT_NO);}
     }
     public void testNativeEarlyCompletionIsRejected()throws Exception{
         int[] calls=new int[3];
